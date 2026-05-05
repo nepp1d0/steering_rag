@@ -1,0 +1,10 @@
+{
+  "name": "HotpotQA",
+  "version": "fullwiki",
+  "description": "HotpotQA: A Dataset for Diverse, Explainable Multi-hop Question Answering",
+  "splits": {
+    "train": 90447,
+    "validation": 7405,
+    "test": 7405
+  }
+}
