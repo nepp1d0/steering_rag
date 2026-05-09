@@ -15,6 +15,7 @@ import argparse
 import sys
 from pathlib import Path
 from typing import Dict, List
+import ast
 
 import pandas as pd
 from datasets import load_dataset
@@ -46,6 +47,7 @@ def normalize_nq_swap(split: str = "validation") -> List[Dict]:
             "factual_context": row["original_context"],
             "non_factual_answer": list(substituted),
             "non_factual_evidence": row["substituted_context"],
+            "ground_truth": row["original_answers"],
             "original_dataset_id": "nq_swap",
         })
     logger.info(f"NQ-Swap: kept {len(rows)} samples (substitution_type==corpus).")
@@ -77,10 +79,11 @@ def normalize_conflictqa(csv_path: Path) -> List[Dict]:
             continue
         rows.append({
             "question": r["question"],
-            "factual_answer": [str(factual_ans)],
-            "factual_context": str(factual_ctx),
-            "non_factual_answer": [str(non_factual_ans)],
-            "non_factual_evidence": str(non_factual_ctx),
+            "factual_answer": factual_ans,
+            "factual_context": factual_ctx,
+            "non_factual_answer": non_factual_ans,
+            "non_factual_evidence": non_factual_ctx,
+            "ground_truth": ast.literal_eval(r["ground_truth"]),
             "original_dataset_id": "conflictqa",
         })
     logger.info(f"ConflictQA: kept {len(rows)} XOR samples.")
