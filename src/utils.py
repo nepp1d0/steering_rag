@@ -15,6 +15,7 @@ Normalized sample schema (used by every experiment):
 from __future__ import annotations
 
 import json
+from re import X
 import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
@@ -121,3 +122,5 @@ def diff_in_means(pos_acts: torch.Tensor, neg_acts: torch.Tensor, normalize: boo
     if normalize:
         direction = direction / (direction.norm() + 1e-8)
     return direction
+
+

@@ -75,7 +75,7 @@ def normalize_conflictqa(csv_path: Path) -> List[Dict]:
             non_factual_ans = r["memory_answer"]
             non_factual_ctx = r["parametric_memory_aligned_evidence"]
 
-        if not factual_ctx or not non_factual_ctx:
+        if not (isinstance(factual_ctx, str) and factual_ctx.strip() and isinstance(non_factual_ctx, str) and non_factual_ctx.strip()):
             continue
         rows.append({
             "question": r["question"],
