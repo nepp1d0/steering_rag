@@ -77,7 +77,9 @@ def load_sae(model_id: str, layer: int, sae_release: str | None, sae_id_tpl: str
             )
     sae_id = sae_id_tpl.format(layer=layer)
     logger.info(f"Loading SAE: release={sae_release!r}  sae_id={sae_id!r}")
-    sae, _, _ = SAE.from_pretrained(release=sae_release, sae_id=sae_id, device=device)
+    # Load to CPU first: safetensors safe_open rejects bare "cuda" (needs "cuda:0" or "cpu").
+    sae, _, _ = SAE.from_pretrained(release=sae_release, sae_id=sae_id, device="cpu")
+    sae = sae.to(device)
     sae.eval()
     return sae
 
