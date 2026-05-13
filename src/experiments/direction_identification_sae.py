@@ -56,7 +56,7 @@ from sae_lens import SAE
 
 # Default (release, sae_id_template) per model family keyword.
 SAE_DEFAULTS: Dict[str, Tuple[str, str]] = {
-    "llama": ("llama_scope_lxr_8x", "blocks.{layer}.hook_resid_post"),
+    "llama": ("llama_scope_lxr_8x", "l{layer}r_8x"),
 }
 
 
@@ -128,7 +128,7 @@ def main() -> None:
     parser.add_argument("--layers", required=True, help="Comma-separated layer numbers, e.g. '10,15,20'.")
     parser.add_argument("--top-k", type=int, default=10, help="Number of SAE features to combine into direction.")
     parser.add_argument("--sae-release", default=None, help="sae_lens release name (auto-detected for Llama).")
-    parser.add_argument("--sae-id-template", default="blocks.{layer}.hook_resid_post",
+    parser.add_argument("--sae-id-template", default="l{layer}r_8x",
                         help="SAE id template with {layer} placeholder.")
     args = parser.parse_args()
 
