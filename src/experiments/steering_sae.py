@@ -61,6 +61,9 @@ def main() -> None:
     ap.add_argument("--alpha", type=float, required=True)
     ap.add_argument("--normalize", action="store_true",
                     help="L2-normalise directions before applying alpha.")
+    ap.add_argument("--last-token-only", action="store_true",
+                    help="Steer only the last token position (paper default). "
+                         "Without this flag, all positions are steered (steering.py default).")
     ap.add_argument("--max-new-tokens", type=int, default=MAX_NEW_TOKENS_DEFAULT)
     ap.add_argument("--batch-size", type=int, default=BATCH_SIZE_DEFAULT)
     args = ap.parse_args()
@@ -68,7 +71,8 @@ def main() -> None:
     out_root = RESULTS_DIR / "steering" / safe_model_id(args.model) / args.eval_dataset
     out_root.mkdir(parents=True, exist_ok=True)
     setup_logging("steering_sae", out_root)
-    logger.info(f"model={args.model} | eval={args.eval_dataset} | alpha={args.alpha} | normalize={args.normalize}")
+    logger.info(f"model={args.model} | eval={args.eval_dataset} | alpha={args.alpha} | "
+                f"normalize={args.normalize} | last_token_only={args.last_token_only}")
 
     samples = load_normalized(args.eval_dataset)
     logger.info(f"Loaded {len(samples)} samples for '{args.eval_dataset}'.")
@@ -106,8 +110,13 @@ def main() -> None:
         d = load_direction(dir_path, args.normalize, device, model.cfg.dtype)
         hook_point = tl_utils.get_act_name("resid_post", info["layer"])
 
-        def steer_hook(resid, hook, _v=d, _a=args.alpha):
-            return resid + _a * _v
+        if args.last_token_only:
+            def steer_hook(resid, hook, _v=d, _a=args.alpha):
+                resid[:, -1, :] = resid[:, -1, :] + _a * _v
+                return resid
+        else:
+            def steer_hook(resid, hook, _v=d, _a=args.alpha):
+                return resid + _a * _v
 
         with model.hooks(fwd_hooks=[(hook_point, steer_hook)]):
             steered = batched_generate(
@@ -129,6 +138,7 @@ def main() -> None:
                     "steered_generation": s,
                     "alpha": args.alpha,
                     "normalized_direction": args.normalize,
+                    "last_token_only": args.last_token_only,
                     "prompt": prompt,
                     "ground_truth": sample["ground_truth"],
                     **info,

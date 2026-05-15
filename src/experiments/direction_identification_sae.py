@@ -93,6 +93,13 @@ def sae_direction(
     """
     Build an SAE-based steering direction from contrastive residual activations.
 
+    Feature selection follows Xin et al. (ACL 2025): frequency-based separation score
+        sep(i) = freq(pos, i) - freq(neg, i)
+    where freq(S, i) = proportion of samples in S where feature i fires (activation > 0).
+    This is more robust than mean difference for TopK SAEs where activations are sparse.
+
+    The direction is a weighted sum of the top-k decoder columns (weights = sep scores).
+
     Returns:
         direction      - un-normalised weighted sum of top-k decoder columns [d_model], float32, cpu
         norm_pre       - L2 norm of that raw direction (for meta.json)
@@ -105,9 +112,13 @@ def sae_direction(
         pos_feats = sae.encode(pos_acts.to(device=device, dtype=sae_dtype))  # [n, d_sae]
         neg_feats = sae.encode(neg_acts.to(device=device, dtype=sae_dtype))  # [n, d_sae]
 
-    feat_diff = pos_feats.mean(0) - neg_feats.mean(0)          # [d_sae]
-    top_idx = feat_diff.topk(top_k).indices                    # [top_k]
-    weights = feat_diff[top_idx]                               # [top_k]
+    # Frequency-based separation score (Xin et al. 2025)
+    pos_freq = (pos_feats > 0).float().mean(0)   # [d_sae]
+    neg_freq = (neg_feats > 0).float().mean(0)
+    sep_score = pos_freq - neg_freq              # [d_sae]
+
+    top_idx = sep_score.topk(top_k).indices      # [top_k]
+    weights = sep_score[top_idx]                 # [top_k]
 
     # Weighted sum of decoder columns -> direction in residual stream space
     direction = (weights.unsqueeze(1) * sae.W_dec[top_idx]).sum(0)  # [d_model]

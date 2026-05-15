@@ -429,3 +429,5 @@ FodyWeavers.xsd
 *.msp
 
 .vscode/
+CLAUDE.md
+.claude/
