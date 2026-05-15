@@ -62,15 +62,15 @@ def plot_results(results_path: Path, out_path: Path) -> None:
     if has_rank:
         ax3 = axes[2]
         first_k = ks[0]
-        p_vals = []
+        mean_gold, mean_nf = [], []
         for alpha in alphas:
             rows = [r for r in rank_records if r["alpha"] == alpha and r["k"] == first_k]
-            p_vals.append(sum(r["gold_rank"] < r["nonfactual_rank"] for r in rows) / len(rows))
-        ax3.plot(alphas, p_vals, marker="o", color="steelblue")
-        ax3.axhline(0.5, color="gray", linestyle="--", linewidth=0.8, label="random")
+            mean_gold.append(sum(r["gold_rank"] for r in rows) / len(rows))
+            mean_nf.append(sum(r["nonfactual_rank"] for r in rows) / len(rows))
+        ax3.plot(alphas, mean_gold, marker="o", label="gold (lower=better)")
+        ax3.plot(alphas, mean_nf,   marker="o", label="non-factual (higher=better)")
         ax3.set_xlabel("α")
-        ax3.set_ylabel("P(rank_gold < rank_nonfactual)")
-        ax3.set_ylim(0, 1.05)
+        ax3.set_ylabel("mean rank")
         ax3.legend(fontsize=8)
         ax3.set_title(title, fontsize=7)
 
