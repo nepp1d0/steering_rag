@@ -75,17 +75,7 @@ def normalize_conflictqa(csv_path: Path) -> List[Dict]:
             non_factual_ans = r["memory_answer"]
             non_factual_ctx = r["parametric_memory_aligned_evidence"]
 
-        if not (isinstance(factual_ctx, str) and factual_ctx.strip() and isinstance(non_factual_ctx, str) and non_factual_ctx.strip()):
-            continue
-        rows.append({
-            "question": r["question"],
-            "factual_answer": factual_ans,
-            "factual_context": factual_ctx,
-            "non_factual_answer": non_factual_ans,
-            "non_factual_evidence": non_factual_ctx,
-            "ground_truth": ast.literal_eval(r["ground_truth"]),
-            "original_dataset_id": "conflictqa",
-        })
+        
     logger.info(f"ConflictQA: kept {len(rows)} XOR samples.")
     return rows
 
