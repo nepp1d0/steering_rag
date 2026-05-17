@@ -28,7 +28,8 @@ import transformer_lens.utils as tl_utils
 from transformer_lens import HookedTransformer
 from sentence_transformers import SentenceTransformer
 
-MODELS = ["meta-llama/Llama-3.1-8B-Instruct", "google/gemma-3-4b-it"]
+#MODELS = ["meta-llama/Llama-3.1-8B-Instruct", "google/gemma-3-4b-it"]
+MODELS = ["meta-llama/Llama-3.2-1B-Instruct", "google/gemma-3-4b-it"]
 DATASETS = ["nq_swap", "conflictqa"]
 DIRECTION_DATASETS = ["nq_swap", "conflictqa"]
 PROCEDURES = ["context_only"] #, "ab_choice"]
@@ -190,7 +191,7 @@ def main() -> None:
 
 
             #Load direction
-            dir_path = (RESULTS_DIR / "direction_identification" / safe_model_id(args.model)
+            dir_path = (RESULTS_DIR / "direction_identification" / safe_model_id(model)
                     / direction_dataset / procedure / f"layer_{layer}" / position / "direction.pt")
             direction = torch.load(dir_path, map_location="cpu").float()
             if normalize_direction:
