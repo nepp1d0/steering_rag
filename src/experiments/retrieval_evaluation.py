@@ -31,9 +31,9 @@ from sentence_transformers import SentenceTransformer
 MODELS = ["meta-llama/Llama-3.1-8B-Instruct", "google/gemma-3-4b-it"]
 DATASETS = ["nq_swap", "conflictqa"]
 DIRECTION_DATASETS = ["nq_swap", "conflictqa"]
-PROCEDURES = ["context_only", "ab_choice"]
+PROCEDURES = ["context_only"] #, "ab_choice"]
 LAYERS = [10, 15, 20]
-POSITIONS = ["last_pos", "entity_pos"]
+POSITIONS = ["last_pos"]#, "entity_pos"]
 ALPHAS = [0.0, 0.3, 0.5, 1.0]
 KS = [2, 5, 10]
 SBERT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
@@ -220,7 +220,8 @@ def main() -> None:
             logger.info(f"Saved LLM hidden states -> {llm_cache}")
             del model
 
-        compute_evaluation(llm_hidden, direction, sbert_emb, samples, all_docs, doc_idx, sbert_enc, ALPHAS, KS, out_dir)
+            compute_evaluation(llm_hidden, direction, sbert_emb, samples, all_docs, doc_idx, sbert_enc, ALPHAS, KS, out_dir)
+            del llm_hidden, sbert_emb, sbert_enc
         logger.info("Done computing automatedevaluation.")
     else:
         direction_dataset = args.direction_dataset or args.dataset
