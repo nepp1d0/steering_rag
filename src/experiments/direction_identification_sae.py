@@ -153,8 +153,8 @@ def main() -> None:
     setup_logging("direction_identification_sae", out_root)
     logger.info(f"model={args.model} | dataset={args.dataset} | layers={layers} | top_k={args.top_k}")
 
-    samples = load_normalized(args.dataset)
-    logger.info(f"Loaded {len(samples)} samples.")
+    samples = load_normalized(args.dataset)["train"]
+    logger.info(f"Loaded {len(samples)} train samples.")
 
     model = HookedTransformer.from_pretrained(args.model, device=device, dtype="bfloat16")
     model.eval()

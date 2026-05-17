@@ -43,13 +43,29 @@ def safe_model_id(hf_id: str) -> str:
     return hf_id.replace("/", "__")
 
 
-def load_normalized(dataset_id: str) -> List[Dict]:
-    """Loads a previously-normalized dataset from `data/normalized_dataset/<id>/data.jsonl`."""
-    path = NORMALIZED_DIR / dataset_id / "data.jsonl"
-    if not path.exists():
-        raise FileNotFoundError(f"Normalized dataset not found: {path}. Run dataset_normalization.py first.")
-    with path.open() as f:
-        return [json.loads(line) for line in f if line.strip()]
+class NormalizedDataset:
+    """Holds train/test splits; access via dataset['train'] or dataset['test']."""
+
+    def __init__(self, splits: Dict[str, List[Dict]]):
+        self._splits = splits
+
+    def __getitem__(self, split: str) -> List[Dict]:
+        if split not in self._splits:
+            raise KeyError(f"Unknown split '{split}'. Available: {list(self._splits)}")
+        return self._splits[split]
+
+
+def load_normalized(dataset_id: str) -> NormalizedDataset:
+    """Loads train/test splits from `data/normalized_dataset/<id>/{train,test}.jsonl`."""
+    base = NORMALIZED_DIR / dataset_id
+    splits: Dict[str, List[Dict]] = {}
+    for name in ("train", "test"):
+        path = base / f"{name}.jsonl"
+        if not path.exists():
+            raise FileNotFoundError(f"Split not found: {path}. Run dataset_normalization.py first.")
+        with path.open() as f:
+            splits[name] = [json.loads(line) for line in f if line.strip()]
+    return NormalizedDataset(splits)
 
 
 def write_jsonl(path: Path, rows: Iterable[Dict]) -> None:

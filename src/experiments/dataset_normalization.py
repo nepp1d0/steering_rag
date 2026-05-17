@@ -12,10 +12,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import random
 import sys
 from pathlib import Path
 from typing import Dict, List
-import ast
 
 import pandas as pd
 from datasets import load_dataset
@@ -63,7 +63,6 @@ def normalize_conflictqa(csv_path: Path) -> List[Dict]:
         mem_ok, ctr_ok = bool(r.get("memory_is_correct")), bool(r.get("counter_is_correct"))
         if mem_ok == ctr_ok:
             continue  # skip ambiguous (both true or both false)
-
         if mem_ok:
             factual_ans = r["memory_answer"]
             factual_ctx = r["parametric_memory_aligned_evidence"]
@@ -74,10 +73,31 @@ def normalize_conflictqa(csv_path: Path) -> List[Dict]:
             factual_ctx = r["counter_memory_aligned_evidence"]
             non_factual_ans = r["memory_answer"]
             non_factual_ctx = r["parametric_memory_aligned_evidence"]
-
-        
+        if not factual_ctx or not non_factual_ctx:
+            continue
+        rows.append({
+            "question": r["question"],
+            "factual_answer": [str(factual_ans)],
+            "factual_context": str(factual_ctx),
+            "non_factual_answer": [str(non_factual_ans)],
+            "non_factual_evidence": str(non_factual_ctx),
+            "original_dataset_id": "conflictqa",
+        })
     logger.info(f"ConflictQA: kept {len(rows)} XOR samples.")
     return rows
+
+
+def make_split(rows: List[Dict], train_frac: float = 0.8, seed: int = 42) -> Dict[str, List[Dict]]:
+    """Split rows 80/20 on unique questions (all rows sharing a question go to the same split)."""
+    questions = list({r["question"] for r in rows})
+    rng = random.Random(seed)
+    rng.shuffle(questions)
+    n_train = int(len(questions) * train_frac)
+    train_qs = set(questions[:n_train])
+    return {
+        "train": [r for r in rows if r["question"] in train_qs],
+        "test": [r for r in rows if r["question"] not in train_qs],
+    }
 
 
 def main() -> None:
@@ -86,17 +106,21 @@ def main() -> None:
                         help="Split to use for the HF NQ-Swap dataset.")
     parser.add_argument("--conflictqa_csv", type=str, default=str(CONFLICTQA_DEFAULT_CSV),
                         help="Path to the ConflictQA CSV file.")
+    parser.add_argument("--train_frac", type=float, default=0.8,
+                        help="Fraction of unique questions assigned to train split.")
     args = parser.parse_args()
 
     setup_logging("dataset_normalization", NORMALIZED_DIR)
 
-    nq_rows = normalize_nq_swap(split=args.nq_swap_split)
-    write_jsonl(NORMALIZED_DIR / "nq_swap" / "data.jsonl", nq_rows)
-    logger.info(f"Wrote {len(nq_rows)} -> {NORMALIZED_DIR / 'nq_swap' / 'data.jsonl'}")
-
-    cqa_rows = normalize_conflictqa(Path(args.conflictqa_csv))
-    write_jsonl(NORMALIZED_DIR / "conflictqa" / "data.jsonl", cqa_rows)
-    logger.info(f"Wrote {len(cqa_rows)} -> {NORMALIZED_DIR / 'conflictqa' / 'data.jsonl'}")
+    for dataset_id, rows in [
+        ("nq_swap", normalize_nq_swap(split=args.nq_swap_split)),
+        ("conflictqa", normalize_conflictqa(Path(args.conflictqa_csv))),
+    ]:
+        splits = make_split(rows, train_frac=args.train_frac)
+        for split_name, split_rows in splits.items():
+            path = NORMALIZED_DIR / dataset_id / f"{split_name}.jsonl"
+            write_jsonl(path, split_rows)
+            logger.info(f"Wrote {len(split_rows)} {split_name} samples -> {path}")
 
 
 if __name__ == "__main__":

@@ -74,8 +74,8 @@ def main() -> None:
     logger.info(f"model={args.model} | eval={args.eval_dataset} | alpha={args.alpha} | "
                 f"normalize={args.normalize} | last_token_only={args.last_token_only}")
 
-    samples = load_normalized(args.eval_dataset)
-    logger.info(f"Loaded {len(samples)} samples for '{args.eval_dataset}'.")
+    samples = load_normalized(args.eval_dataset)["test"]
+    logger.info(f"Loaded {len(samples)} test samples for '{args.eval_dataset}'.")
 
     direction_files = find_sae_directions(args.model)
     if not direction_files:

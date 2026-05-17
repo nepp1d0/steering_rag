@@ -153,8 +153,8 @@ def main() -> None:
     setup_logging("steering", out_root)
     logger.info(f"model={args.model} | eval={args.eval_dataset} | alpha={args.alpha} | normalize={args.normalize} | bs={args.batch_size}")
 
-    samples = load_normalized(args.eval_dataset)
-    logger.info(f"Loaded {len(samples)} samples for '{args.eval_dataset}'.")
+    samples = load_normalized(args.eval_dataset)["test"]
+    logger.info(f"Loaded {len(samples)} test samples for '{args.eval_dataset}'.")
 
     direction_files = find_directions(args.model)
     if not direction_files:

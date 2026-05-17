@@ -184,7 +184,7 @@ def main() -> None:
             logger.info(f"model={model} | dataset={dataset} | direction_dataset={direction_dataset} | normalize_direction={normalize_direction} | layer={layer} | procedure={procedure}")
             
             #Load samples
-            samples = load_normalized(dataset)
+            samples = load_normalized(dataset)["test"]
             all_docs = sorted(set(s["factual_context"] for s in samples) | set(s["non_factual_evidence"] for s in samples))
             doc_idx = {d: i for i, d in enumerate(all_docs)}
             logger.info(f"Corpus size: {len(all_docs)} unique documents")
@@ -231,7 +231,7 @@ def main() -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
         setup_logging("retrieval_evaluation", out_dir)
         logger.info(f"model={args.model} | dataset={args.dataset} | direction_dataset={direction_dataset} | layer={args.layer} | procedure={args.procedure}")
-        samples = load_normalized(args.dataset)
+        samples = load_normalized(args.dataset)["test"]
 
         all_docs = sorted(set(s["factual_context"] for s in samples) | set(s["non_factual_evidence"] for s in samples))
         doc_idx = {d: i for i, d in enumerate(all_docs)}

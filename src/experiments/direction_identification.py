@@ -163,8 +163,8 @@ def main() -> None:
     setup_logging("direction_identification", out_root)
     logger.info(f"model={args.model} | dataset={args.dataset} | layers={args.layers}")
 
-    samples = load_normalized(args.dataset)
-    logger.info(f"Loaded {len(samples)} normalized samples for '{args.dataset}'.")
+    samples = load_normalized(args.dataset)["train"]
+    logger.info(f"Loaded {len(samples)} train samples for '{args.dataset}'.")
 
     device = tl_utils.get_device()
     logger.info(f"Loading model on {device} ...")
