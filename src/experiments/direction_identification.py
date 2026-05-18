@@ -30,7 +30,7 @@ import json
 import random
 import sys
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import torch
 from tqdm import tqdm
@@ -40,8 +40,6 @@ from src.utils import (
     NORMALIZED_DIR,
     RESULTS_DIR,
     diff_in_means,
-    get_last_residual,
-    get_residual_at_positions,
     load_normalized,
     logger,
     make_ab_choice_prompt,
@@ -76,24 +74,58 @@ def collect_context_only(
     hook_point: str,
     samples: List[Dict],
     want_entity_pos: bool,
+    batch_size: int = 8,
 ) -> Dict[str, Dict[str, torch.Tensor]]:
     """Returns `{position: {"pos": [n,d], "neg": [n,d]}}` for the context-only procedure."""
+    tok = model.tokenizer
+    if tok.pad_token_id is None:
+        tok.pad_token = tok.eos_token
+
     pos_last, neg_last = [], []
     pos_ent, neg_ent = [], []
 
-    for s in tqdm(samples, desc="ctx-only acts"):
-        ent_pos = s["factual_answer"][0] if (want_entity_pos and s.get("factual_answer")) else None
-        ent_neg = s["non_factual_answer"][0] if (want_entity_pos and s.get("non_factual_answer")) else None
+    def run_batch(texts: List[str], entities: List[Optional[str]]):
+        # Tokenize individually with BOS to know each sequence's original length.
+        enc = [tok(t, return_tensors="pt", add_special_tokens=True).input_ids[0] for t in texts]
+        orig_lens = [e.shape[0] for e in enc]
+        L = max(orig_lens)
+        # Left-pad the batch.
+        batch = torch.full((len(texts), L), tok.pad_token_id, dtype=torch.long, device=model.cfg.device)
+        for r, e in enumerate(enc):
+            batch[r, L - e.shape[0]:] = e.to(model.cfg.device)
+        with torch.no_grad():
+            _, cache = model.run_with_cache(batch, names_filter=hook_point, prepend_bos=False)
+        resid = cache[hook_point]  # [B, L, d_model]
+        last = resid[:, -1, :].detach().cpu()
+        ent_acts: List[Optional[torch.Tensor]] = []
+        for r, (text, entity, orig_len) in enumerate(zip(texts, entities, orig_lens)):
+            act = None
+            if entity:
+                idx_in_text = text.find(entity)
+                if idx_in_text >= 0:
+                    prefix = text[:idx_in_text + len(entity)]
+                    # entity_tok_idx: 0-based index into the BOS-prepended token sequence.
+                    entity_tok_idx = tok(prefix, return_tensors="pt", add_special_tokens=True).input_ids.shape[1] - 1
+                    # Map into left-padded batch position.
+                    padded_idx = L - orig_len + entity_tok_idx
+                    padded_idx = max(0, min(padded_idx, L - 1))
+                    act = resid[r, padded_idx, :].detach().cpu()
+            ent_acts.append(act)
+        return last, ent_acts
 
-        a_pos = get_residual_at_positions(model, hook_point, s["factual_context"], ent_pos)
-        a_neg = get_residual_at_positions(model, hook_point, s["non_factual_evidence"], ent_neg)
-
-        pos_last.append(a_pos["last_pos"])
-        neg_last.append(a_neg["last_pos"])
-
-        if want_entity_pos and "entity_pos" in a_pos and "entity_pos" in a_neg:
-            pos_ent.append(a_pos["entity_pos"])
-            neg_ent.append(a_neg["entity_pos"])
+    for i in tqdm(range(0, len(samples), batch_size), desc="ctx-only acts"):
+        b = samples[i:i + batch_size]
+        pos_entities = [s["factual_answer"][0] if (want_entity_pos and s.get("factual_answer")) else None for s in b]
+        neg_entities = [s["non_factual_answer"][0] if (want_entity_pos and s.get("non_factual_answer")) else None for s in b]
+        pos_last_b, pos_ent_b = run_batch([s["factual_context"] for s in b], pos_entities)
+        neg_last_b, neg_ent_b = run_batch([s["non_factual_evidence"] for s in b], neg_entities)
+        pos_last.extend(pos_last_b.unbind(0))
+        neg_last.extend(neg_last_b.unbind(0))
+        if want_entity_pos:
+            for pe, ne in zip(pos_ent_b, neg_ent_b):
+                if pe is not None and ne is not None:
+                    pos_ent.append(pe)
+                    neg_ent.append(ne)
 
     out = {"last_pos": {"pos": torch.stack(pos_last), "neg": torch.stack(neg_last)}}
     if want_entity_pos and pos_ent:
@@ -105,31 +137,50 @@ def collect_ab_choice(
     model,
     hook_point: str,
     samples: List[Dict],
+    batch_size: int = 8,
 ) -> Dict[str, Dict[str, torch.Tensor]]:
     """
     Builds an A/B-choice prompt per sample with the factual chunk randomly placed at A or B.
     Pos = prompt ending with the correct label, Neg = prompt ending with the wrong label.
     Returns activations at the last (label) token.
     """
+    tok = model.tokenizer
+    if tok.pad_token_id is None:
+        tok.pad_token = tok.eos_token
+
     rng = random.Random(AB_CHOICE_SEED)
     n = len(samples)
     factual_is_a = [True] * (n // 2) + [False] * (n - n // 2)
     rng.shuffle(factual_is_a)
 
     pos_acts, neg_acts = [], []
-    for s, fact_a in tqdm(list(zip(samples, factual_is_a)), desc="ab-choice acts"):
-        if fact_a:
-            ctx_a, ctx_b = s["factual_context"], s["non_factual_evidence"]
-            correct, wrong = "A", "B"
-        else:
-            ctx_a, ctx_b = s["non_factual_evidence"], s["factual_context"]
-            correct, wrong = "B", "A"
 
-        prompt_pos = make_ab_choice_prompt(ctx_a, ctx_b, correct)
-        prompt_neg = make_ab_choice_prompt(ctx_a, ctx_b, wrong)
+    def run_batch(texts: List[str]) -> torch.Tensor:
+        enc = [tok(t, return_tensors="pt", add_special_tokens=True).input_ids[0] for t in texts]
+        orig_lens = [e.shape[0] for e in enc]
+        L = max(orig_lens)
+        batch = torch.full((len(texts), L), tok.pad_token_id, dtype=torch.long, device=model.cfg.device)
+        for r, e in enumerate(enc):
+            batch[r, L - e.shape[0]:] = e.to(model.cfg.device)
+        with torch.no_grad():
+            _, cache = model.run_with_cache(batch, names_filter=hook_point, prepend_bos=False)
+        return cache[hook_point][:, -1, :].detach().cpu()
 
-        pos_acts.append(get_last_residual(model, hook_point, prompt_pos))
-        neg_acts.append(get_last_residual(model, hook_point, prompt_neg))
+    zipped = list(zip(samples, factual_is_a))
+    for i in tqdm(range(0, len(zipped), batch_size), desc="ab-choice acts"):
+        b = zipped[i:i + batch_size]
+        pos_texts, neg_texts = [], []
+        for s, fact_a in b:
+            if fact_a:
+                ctx_a, ctx_b = s["factual_context"], s["non_factual_evidence"]
+                correct, wrong = "A", "B"
+            else:
+                ctx_a, ctx_b = s["non_factual_evidence"], s["factual_context"]
+                correct, wrong = "B", "A"
+            pos_texts.append(make_ab_choice_prompt(ctx_a, ctx_b, correct))
+            neg_texts.append(make_ab_choice_prompt(ctx_a, ctx_b, wrong))
+        pos_acts.extend(run_batch(pos_texts).unbind(0))
+        neg_acts.extend(run_batch(neg_texts).unbind(0))
 
     return {"choice_token": {"pos": torch.stack(pos_acts), "neg": torch.stack(neg_acts)}}
 
@@ -164,6 +215,8 @@ def main() -> None:
                         help="Comma-separated list of layers. If omitted, all model layers are used.")
     parser.add_argument("--seed", type=int, default=None,
                         help="Split seed. If omitted, runs for all seeds found in the normalized dataset.")
+    parser.add_argument("--batch-size", type=int, default=8,
+                        help="Number of samples per forward pass.")
     args = parser.parse_args()
 
     seeds = [args.seed] if args.seed is not None else discover_seeds(args.dataset)
@@ -193,7 +246,7 @@ def main() -> None:
 
         for layer in layers:
             if all((out_root / proc / f"layer_{layer}" / pos / "direction.pt").exists()
-                   for proc, pos in [("context_only", "last_pos"), ("ab_choice", "choice_token")]):
+                   for proc, pos in [("context_only", "last_pos")]):#, ("ab_choice", "choice_token")]):
                 logger.info(f"Skip layer {layer} (already computed).")
                 continue
             hook_point = tl_utils.get_act_name("resid_post", layer)
@@ -201,7 +254,7 @@ def main() -> None:
 
             # Procedure 1: context_only
             logger.info("-> procedure: context_only")
-            ctx_acts = collect_context_only(model, hook_point, samples, want_entity_pos=want_entity_pos)
+            ctx_acts = collect_context_only(model, hook_point, samples, want_entity_pos=want_entity_pos, batch_size=args.batch_size)
             for pos_name in ctx_positions:
                 if pos_name not in ctx_acts:
                     logger.warning(f"Skipping {pos_name}: no activations collected.")
@@ -216,16 +269,16 @@ def main() -> None:
                 )
 
             # Procedure 2: ab_choice
-            logger.info("-> procedure: ab_choice")
-            ab_acts = collect_ab_choice(model, hook_point, samples)
-            for pos_name, stacks in ab_acts.items():
-                direction = diff_in_means(stacks["pos"], stacks["neg"], normalize=False)
-                save_direction(
-                    out_root / "ab_choice" / f"layer_{layer}" / pos_name,
-                    direction, stacks["pos"], stacks["neg"],
-                    {"model": args.model, "dataset": args.dataset, "layer": layer, "seed": seed,
-                     "procedure": "ab_choice", "position": pos_name, "ab_seed": AB_CHOICE_SEED},
-                )
+            #logger.info("-> procedure: ab_choice")
+            #ab_acts = collect_ab_choice(model, hook_point, samples, batch_size=args.batch_size)
+            #for pos_name, stacks in ab_acts.items():
+            #    direction = diff_in_means(stacks["pos"], stacks["neg"], normalize=False)
+            #    save_direction(
+            #        out_root / "ab_choice" / f"layer_{layer}" / pos_name,
+            #        direction, stacks["pos"], stacks["neg"],
+            #        {"model": args.model, "dataset": args.dataset, "layer": layer, "seed": seed,
+            #         "procedure": "ab_choice", "position": pos_name, "ab_seed": AB_CHOICE_SEED},
+            #    )
 
     logger.info("Done.")
 
