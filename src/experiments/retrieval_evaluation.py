@@ -29,11 +29,11 @@ from transformer_lens import HookedTransformer
 from sentence_transformers import SentenceTransformer
 
 #MODELS = ["meta-llama/Llama-3.1-8B-Instruct", "google/gemma-3-4b-it"]
-MODELS = ["meta-llama/Llama-3.2-1B-Instruct", "google/gemma-3-4b-it"]
+MODELS = ["meta-llama/Llama-3.1-8B-Instruct", "meta-llama/Llama-3.2-1B-Instruct", "google/gemma-3-4b-it"]
 DATASETS = ["nq_swap", "conflictqa"]
 DIRECTION_DATASETS = ["nq_swap", "conflictqa"]
 PROCEDURES = ["context_only"] #, "ab_choice"]
-LAYERS = [10, 15, 20]
+LAYERS = [10, 15]
 POSITIONS = ["last_pos"]#, "entity_pos"]
 ALPHAS = [0.0, 0.3, 0.5, 1.0]
 KS = [2, 5, 10]
