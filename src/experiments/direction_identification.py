@@ -160,8 +160,8 @@ def main() -> None:
     parser.add_argument("--model", required=True, help="HuggingFace model id (e.g. meta-llama/Llama-3.1-8B-Instruct).")
     parser.add_argument("--dataset", required=True, choices=list(CONTEXT_ONLY_POSITIONS.keys()),
                         help="Normalized dataset id.")
-    parser.add_argument("--layers", required=True, type=parse_layers,
-                        help="Comma-separated list of layers, e.g. '10,15,20'.")
+    parser.add_argument("--layers", type=parse_layers, default=None,
+                        help="Comma-separated list of layers. If omitted, all model layers are used.")
     parser.add_argument("--seed", type=int, default=None,
                         help="Split seed. If omitted, runs for all seeds found in the normalized dataset.")
     args = parser.parse_args()
@@ -179,6 +179,8 @@ def main() -> None:
     device = tl_utils.get_device()
     logger.info(f"Loading model on {device} ...")
     model = HookedTransformer.from_pretrained(args.model, device=device, dtype="bfloat16")
+    layers = args.layers if args.layers is not None else list(range(model.cfg.n_layers))
+    logger.info(f"Layers: {layers}")
 
     ctx_positions = CONTEXT_ONLY_POSITIONS[args.dataset]
     want_entity_pos = "entity_pos" in ctx_positions
@@ -189,7 +191,11 @@ def main() -> None:
         logger.info(f"Loaded {len(samples)} train samples.")
         out_root = RESULTS_DIR / "direction_identification" / safe_model_id(args.model) / args.dataset / f"seed_{seed}"
 
-        for layer in args.layers:
+        for layer in layers:
+            if all((out_root / proc / f"layer_{layer}" / pos / "direction.pt").exists()
+                   for proc, pos in [("context_only", "last_pos"), ("ab_choice", "choice_token")]):
+                logger.info(f"Skip layer {layer} (already computed).")
+                continue
             hook_point = tl_utils.get_act_name("resid_post", layer)
             logger.info(f"=== Layer {layer} ({hook_point}) ===")
 

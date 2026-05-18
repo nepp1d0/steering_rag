@@ -47,6 +47,11 @@ def discover_direction_seeds(model_id: str, dataset: str) -> List[int]:
     return [int(d.name.split("_")[1]) for d in dirs if d.is_dir()]
 
 
+def discover_layers(model_id: str, dataset: str, procedure: str, position: str, seed: int) -> List[int]:
+    root = RESULTS_DIR / "direction_identification" / safe_model_id(model_id) / dataset / f"seed_{seed}" / procedure
+    return sorted(int(d.name.split("_")[1]) for d in root.glob("layer_*") if (d / position / "direction.pt").exists())
+
+
 def zscore(x: np.ndarray) -> np.ndarray:
     return (x - x.mean()) / (x.std())
 
@@ -182,60 +187,63 @@ def main() -> None:
     if args.automated:
         logger.info("Running automated mode ...")
         
-        combinations = itertools.product(MODELS, DATASETS, DIRECTION_DATASETS, PROCEDURES, POSITIONS, LAYERS)
-        for model_name, dataset, direction_dataset, procedure, position, layer in combinations:
+        combinations = itertools.product(MODELS, DATASETS, DIRECTION_DATASETS, PROCEDURES, POSITIONS)
+        for model_name, dataset, direction_dataset, procedure, position in combinations:
             seeds = [args.seed] if args.seed is not None else discover_direction_seeds(model_name, direction_dataset)
             if not seeds:
                 logger.warning(f"No direction seeds found for {model_name}/{direction_dataset}, skipping.")
                 continue
             for seed in seeds:
-                # Create output directory
-                out_dir = (RESULTS_DIR / "retrieval_evaluation" / safe_model_id(model_name)
-                    / dataset / direction_dataset / normalize_path / f"seed_{seed}" / procedure / f"layer_{layer}")
-                out_dir.mkdir(parents=True, exist_ok=True)
-                setup_logging("retrieval_evaluation", out_dir)
-                logger.info(f"model={model_name} | dataset={dataset} | direction_dataset={direction_dataset} | seed={seed} | normalize_direction={normalize_direction} | layer={layer} | procedure={procedure}")
+                for layer in discover_layers(model_name, direction_dataset, procedure, position, seed):
+                    # Create output directory
+                    out_dir = (RESULTS_DIR / "retrieval_evaluation" / safe_model_id(model_name)
+                        / dataset / direction_dataset / normalize_path / f"seed_{seed}" / procedure / f"layer_{layer}")
+                    if (out_dir / "results.jsonl").exists():
+                        logger.info(f"Skip (exists): {out_dir}")
+                        continue
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    setup_logging("retrieval_evaluation", out_dir)
+                    logger.info(f"model={model_name} | dataset={dataset} | direction_dataset={direction_dataset} | seed={seed} | normalize_direction={normalize_direction} | layer={layer} | procedure={procedure}")
 
-                #Load samples
-                samples = load_normalized(dataset, seed)["test"]
-                all_docs = sorted(set(s["factual_context"] for s in samples) | set(s["non_factual_evidence"] for s in samples))
-                doc_idx = {d: i for i, d in enumerate(all_docs)}
-                logger.info(f"Corpus size: {len(all_docs)} unique documents")
+                    #Load samples
+                    samples = load_normalized(dataset, seed)["test"]
+                    all_docs = sorted(set(s["factual_context"] for s in samples) | set(s["non_factual_evidence"] for s in samples))
+                    doc_idx = {d: i for i, d in enumerate(all_docs)}
+                    logger.info(f"Corpus size: {len(all_docs)} unique documents")
 
+                    #Load direction
+                    dir_path = (RESULTS_DIR / "direction_identification" / safe_model_id(model_name)
+                            / direction_dataset / f"seed_{seed}" / procedure / f"layer_{layer}" / position / "direction.pt")
+                    direction = torch.load(dir_path, map_location="cpu").float()
+                    if normalize_direction:
+                        direction = direction / (direction.norm() + 1e-8)
+                    logger.info(f"Loaded direction from {dir_path}")
 
-                #Load direction
-                dir_path = (RESULTS_DIR / "direction_identification" / safe_model_id(model_name)
-                        / direction_dataset / f"seed_{seed}" / procedure / f"layer_{layer}" / position / "direction.pt")
-                direction = torch.load(dir_path, map_location="cpu").float()
-                if normalize_direction:
-                    direction = direction / (direction.norm() + 1e-8)
-                logger.info(f"Loaded direction from {dir_path}")
+                    # Load embedding model
+                    sbert_enc = SentenceTransformer(SBERT_MODEL)
 
-                # Load embedding model
-                sbert_enc = SentenceTransformer(SBERT_MODEL)
+                    # Compute SBERT embeddings
+                    logger.info("Computing SBERT embeddings ...")
+                    sbert_cache = out_dir / "sbert_embeddings.pt"
+                    emb = sbert_enc.encode(all_docs, batch_size=64, show_progress_bar=True, convert_to_numpy=True)
+                    sbert_emb = torch.tensor(emb, dtype=torch.float32)
+                    torch.save(sbert_emb, sbert_cache)
+                    logger.info(f"Saved SBERT embeddings -> {sbert_cache}")
 
-                # Compute SBERT embeddings
-                logger.info("Computing SBERT embeddings ...")
-                sbert_cache = out_dir / "sbert_embeddings.pt"
-                emb = sbert_enc.encode(all_docs, batch_size=64, show_progress_bar=True, convert_to_numpy=True)
-                sbert_emb = torch.tensor(emb, dtype=torch.float32)
-                torch.save(sbert_emb, sbert_cache)
-                logger.info(f"Saved SBERT embeddings -> {sbert_cache}")
+                    # Compute LLM hidden states
+                    logger.info("Computing LLM hidden states ...")
+                    llm_cache = out_dir / "llm_hidden_states.pt"
+                    device = tl_utils.get_device()
+                    model = HookedTransformer.from_pretrained(model_name, device=device, dtype="bfloat16")
+                    model.eval()
+                    hook_point = tl_utils.get_act_name("resid_post", layer)
+                    llm_hidden = compute_llm_hidden_states(model, all_docs, hook_point, BATCH_SIZE)
+                    torch.save(llm_hidden, llm_cache)
+                    logger.info(f"Saved LLM hidden states -> {llm_cache}")
+                    del model
 
-                # Compute LLM hidden states
-                logger.info("Computing LLM hidden states ...")
-                llm_cache = out_dir / "llm_hidden_states.pt"
-                device = tl_utils.get_device()
-                model = HookedTransformer.from_pretrained(model_name, device=device, dtype="bfloat16")
-                model.eval()
-                hook_point = tl_utils.get_act_name("resid_post", layer)
-                llm_hidden = compute_llm_hidden_states(model, all_docs, hook_point, BATCH_SIZE)
-                torch.save(llm_hidden, llm_cache)
-                logger.info(f"Saved LLM hidden states -> {llm_cache}")
-                del model
-
-                compute_evaluation(llm_hidden, direction, sbert_emb, samples, all_docs, doc_idx, sbert_enc, ALPHAS, KS, out_dir)
-                del llm_hidden, sbert_emb, sbert_enc
+                    compute_evaluation(llm_hidden, direction, sbert_emb, samples, all_docs, doc_idx, sbert_enc, ALPHAS, KS, out_dir)
+                    del llm_hidden, sbert_emb, sbert_enc
         logger.info("Done computing automated evaluation.")
     else:
         direction_dataset = args.direction_dataset or args.dataset
@@ -245,6 +253,9 @@ def main() -> None:
             out_dir = (RESULTS_DIR / "retrieval_evaluation" / safe_model_id(args.model)
                     / args.dataset / direction_dataset / normalize_path / f"seed_{seed}" / args.procedure / f"layer_{args.layer}")
             out_dir.mkdir(parents=True, exist_ok=True)
+            if (out_dir / "results.jsonl").exists():
+                logger.info(f"Skip (exists): {out_dir}")
+                continue
             logger.info(f"model={args.model} | dataset={args.dataset} | direction_dataset={direction_dataset} | seed={seed} | layer={args.layer} | procedure={args.procedure}")
             samples = load_normalized(args.dataset, seed)["test"]
 
