@@ -69,8 +69,9 @@ def plot_results(results_path: Path, out_path: Path) -> None:
             mean_nf.append(sum(r["nonfactual_rank"] for r in rows) / len(rows))
         ax3.plot(alphas, mean_gold, marker="o", label="gold (lower=better)")
         ax3.plot(alphas, mean_nf,   marker="o", label="non-factual (higher=better)")
+        ax3.set_yscale("log")
         ax3.set_xlabel("α")
-        ax3.set_ylabel("mean rank")
+        ax3.set_ylabel("mean rank (log scale)")
         ax3.legend(fontsize=8)
         ax3.set_title(title, fontsize=7)
 

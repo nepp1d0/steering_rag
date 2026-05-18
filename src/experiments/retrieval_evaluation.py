@@ -15,7 +15,7 @@ import itertools
 import argparse
 import sys
 from pathlib import Path
-from typing import Literal
+from typing import List, Literal
 
 import numpy as np
 import torch
@@ -39,6 +39,12 @@ ALPHAS = [0.0, 0.3, 0.5, 1.0]
 KS = [2, 5, 10]
 SBERT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 BATCH_SIZE = 4
+
+
+def discover_direction_seeds(model_id: str, dataset: str) -> List[int]:
+    root = RESULTS_DIR / "direction_identification" / safe_model_id(model_id) / dataset
+    dirs = sorted(root.glob("seed_*"), key=lambda d: int(d.name.split("_")[1]))
+    return [int(d.name.split("_")[1]) for d in dirs if d.is_dir()]
 
 
 def zscore(x: np.ndarray) -> np.ndarray:
@@ -164,6 +170,8 @@ def main() -> None:
     ap.add_argument("--ks", type=int, nargs="+", default=[2, 5, 10])
     ap.add_argument("--sbert-model", default="sentence-transformers/all-MiniLM-L6-v2")
     ap.add_argument("--batch-size", type=int, default=4)
+    ap.add_argument("--seed", type=int, default=None,
+                    help="Split seed. If omitted, runs for all seeds found in direction identification results.")
     args = ap.parse_args()
     
     normalize_literals = ["unnormalized", "normalized"]
@@ -175,169 +183,176 @@ def main() -> None:
         logger.info("Running automated mode ...")
         
         combinations = itertools.product(MODELS, DATASETS, DIRECTION_DATASETS, PROCEDURES, POSITIONS, LAYERS)
-        for model, dataset, direction_dataset, procedure, position, layer in combinations:
-            # Create output directory
-            out_dir = (RESULTS_DIR / "retrieval_evaluation" / safe_model_id(model)
-                / dataset / direction_dataset / normalize_path / procedure / f"layer_{layer}")
+        for model_name, dataset, direction_dataset, procedure, position, layer in combinations:
+            seeds = [args.seed] if args.seed is not None else discover_direction_seeds(model_name, direction_dataset)
+            if not seeds:
+                logger.warning(f"No direction seeds found for {model_name}/{direction_dataset}, skipping.")
+                continue
+            for seed in seeds:
+                # Create output directory
+                out_dir = (RESULTS_DIR / "retrieval_evaluation" / safe_model_id(model_name)
+                    / dataset / direction_dataset / normalize_path / f"seed_{seed}" / procedure / f"layer_{layer}")
+                out_dir.mkdir(parents=True, exist_ok=True)
+                setup_logging("retrieval_evaluation", out_dir)
+                logger.info(f"model={model_name} | dataset={dataset} | direction_dataset={direction_dataset} | seed={seed} | normalize_direction={normalize_direction} | layer={layer} | procedure={procedure}")
+
+                #Load samples
+                samples = load_normalized(dataset, seed)["test"]
+                all_docs = sorted(set(s["factual_context"] for s in samples) | set(s["non_factual_evidence"] for s in samples))
+                doc_idx = {d: i for i, d in enumerate(all_docs)}
+                logger.info(f"Corpus size: {len(all_docs)} unique documents")
+
+
+                #Load direction
+                dir_path = (RESULTS_DIR / "direction_identification" / safe_model_id(model_name)
+                        / direction_dataset / f"seed_{seed}" / procedure / f"layer_{layer}" / position / "direction.pt")
+                direction = torch.load(dir_path, map_location="cpu").float()
+                if normalize_direction:
+                    direction = direction / (direction.norm() + 1e-8)
+                logger.info(f"Loaded direction from {dir_path}")
+
+                # Load embedding model
+                sbert_enc = SentenceTransformer(SBERT_MODEL)
+
+                # Compute SBERT embeddings
+                logger.info("Computing SBERT embeddings ...")
+                sbert_cache = out_dir / "sbert_embeddings.pt"
+                emb = sbert_enc.encode(all_docs, batch_size=64, show_progress_bar=True, convert_to_numpy=True)
+                sbert_emb = torch.tensor(emb, dtype=torch.float32)
+                torch.save(sbert_emb, sbert_cache)
+                logger.info(f"Saved SBERT embeddings -> {sbert_cache}")
+
+                # Compute LLM hidden states
+                logger.info("Computing LLM hidden states ...")
+                llm_cache = out_dir / "llm_hidden_states.pt"
+                device = tl_utils.get_device()
+                model = HookedTransformer.from_pretrained(model_name, device=device, dtype="bfloat16")
+                model.eval()
+                hook_point = tl_utils.get_act_name("resid_post", layer)
+                llm_hidden = compute_llm_hidden_states(model, all_docs, hook_point, BATCH_SIZE)
+                torch.save(llm_hidden, llm_cache)
+                logger.info(f"Saved LLM hidden states -> {llm_cache}")
+                del model
+
+                compute_evaluation(llm_hidden, direction, sbert_emb, samples, all_docs, doc_idx, sbert_enc, ALPHAS, KS, out_dir)
+                del llm_hidden, sbert_emb, sbert_enc
+        logger.info("Done computing automated evaluation.")
+    else:
+        direction_dataset = args.direction_dataset or args.dataset
+        seeds = [args.seed] if args.seed is not None else discover_direction_seeds(args.model, direction_dataset)
+        setup_logging("retrieval_evaluation", RESULTS_DIR / "retrieval_evaluation")
+        for seed in seeds:
+            out_dir = (RESULTS_DIR / "retrieval_evaluation" / safe_model_id(args.model)
+                    / args.dataset / direction_dataset / normalize_path / f"seed_{seed}" / args.procedure / f"layer_{args.layer}")
             out_dir.mkdir(parents=True, exist_ok=True)
-            setup_logging("retrieval_evaluation", out_dir)
-            logger.info(f"model={model} | dataset={dataset} | direction_dataset={direction_dataset} | normalize_direction={normalize_direction} | layer={layer} | procedure={procedure}")
-            
-            #Load samples
-            samples = load_normalized(dataset)["test"]
+            logger.info(f"model={args.model} | dataset={args.dataset} | direction_dataset={direction_dataset} | seed={seed} | layer={args.layer} | procedure={args.procedure}")
+            samples = load_normalized(args.dataset, seed)["test"]
+
             all_docs = sorted(set(s["factual_context"] for s in samples) | set(s["non_factual_evidence"] for s in samples))
             doc_idx = {d: i for i, d in enumerate(all_docs)}
             logger.info(f"Corpus size: {len(all_docs)} unique documents")
 
-
-            #Load direction
-            dir_path = (RESULTS_DIR / "direction_identification" / safe_model_id(model)
-                    / direction_dataset / procedure / f"layer_{layer}" / position / "direction.pt")
+            dir_path = (RESULTS_DIR / "direction_identification" / safe_model_id(args.model)
+                        / direction_dataset / f"seed_{seed}" / args.procedure / f"layer_{args.layer}" / args.position / "direction.pt")
             direction = torch.load(dir_path, map_location="cpu").float()
             if normalize_direction:
-                direction = direction / (direction.norm() + 1e-8)
+                direction = direction / (direction.norm())
             logger.info(f"Loaded direction from {dir_path}")
 
-            # Load embedding model
-            sbert_enc = SentenceTransformer(SBERT_MODEL)
-
-            # Compute SBERT embeddings
-            logger.info("Computing SBERT embeddings ...")
             sbert_cache = out_dir / "sbert_embeddings.pt"
-            emb = sbert_enc.encode(all_docs, batch_size=64, show_progress_bar=True, convert_to_numpy=True)
-            sbert_emb = torch.tensor(emb, dtype=torch.float32)
-            torch.save(sbert_emb, sbert_cache)
-            logger.info(f"Saved SBERT embeddings -> {sbert_cache}")
+            sbert_enc = SentenceTransformer(args.sbert_model)
+            if sbert_cache.exists():
+                logger.info("Loading cached SBERT embeddings")
+                sbert_emb = torch.load(sbert_cache, map_location="cpu")
+            else:
+                logger.info("Computing SBERT embeddings ...")
+                emb = sbert_enc.encode(all_docs, batch_size=64, show_progress_bar=True, convert_to_numpy=True)
+                sbert_emb = torch.tensor(emb, dtype=torch.float32)
+                torch.save(sbert_emb, sbert_cache)
+                logger.info(f"Saved SBERT embeddings -> {sbert_cache}")
 
-            # Compute LLM hidden states
-            logger.info("Computing LLM hidden states ...")
             llm_cache = out_dir / "llm_hidden_states.pt"
-            device = tl_utils.get_device()
-            model = HookedTransformer.from_pretrained(model, device=device, dtype="bfloat16")
-            model.eval()
-            hook_point = tl_utils.get_act_name("resid_post", layer)
-            llm_hidden = compute_llm_hidden_states(model, all_docs, hook_point, BATCH_SIZE)
-            torch.save(llm_hidden, llm_cache)
-            logger.info(f"Saved LLM hidden states -> {llm_cache}")
-            del model
+            if llm_cache.exists():
+                logger.info("Loading cached LLM hidden states")
+                llm_hidden = torch.load(llm_cache, map_location="cpu")
+            else:
+                logger.info("Computing LLM hidden states ...")
+                device = tl_utils.get_device()
+                model = HookedTransformer.from_pretrained(args.model, device=device, dtype="bfloat16")
+                model.eval()
+                hook_point = tl_utils.get_act_name("resid_post", args.layer)
+                llm_hidden = compute_llm_hidden_states(model, all_docs, hook_point, args.batch_size)
+                torch.save(llm_hidden, llm_cache)
+                logger.info(f"Saved LLM hidden states -> {llm_cache}")
+                del model
 
-            compute_evaluation(llm_hidden, direction, sbert_emb, samples, all_docs, doc_idx, sbert_enc, ALPHAS, KS, out_dir)
-            del llm_hidden, sbert_emb, sbert_enc
-        logger.info("Done computing automatedevaluation.")
-    else:
-        direction_dataset = args.direction_dataset or args.dataset
-        out_dir = (RESULTS_DIR / "retrieval_evaluation" / safe_model_id(args.model)
-                / args.dataset / direction_dataset / normalize_path / args.procedure / f"layer_{args.layer}")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        setup_logging("retrieval_evaluation", out_dir)
-        logger.info(f"model={args.model} | dataset={args.dataset} | direction_dataset={direction_dataset} | layer={args.layer} | procedure={args.procedure}")
-        samples = load_normalized(args.dataset)["test"]
+            s_proj_all = (llm_hidden @ direction).numpy()  # [N]
+            sbert_norm = sbert_emb / (sbert_emb.norm(dim=1, keepdim=True))  # [N, dim]
 
-        all_docs = sorted(set(s["factual_context"] for s in samples) | set(s["non_factual_evidence"] for s in samples))
-        doc_idx = {d: i for i, d in enumerate(all_docs)}
-        logger.info(f"Corpus size: {len(all_docs)} unique documents")
+            logger.info("Encoding queries with SBERT ...")
+            q_embs = sbert_enc.encode([s["question"] for s in samples], batch_size=64,
+                                    show_progress_bar=True, convert_to_numpy=True)
+            q_embs_norm = torch.tensor(q_embs, dtype=torch.float32)
+            q_embs_norm = q_embs_norm / (q_embs_norm.norm(dim=1, keepdim=True))
 
-        dir_path = (RESULTS_DIR / "direction_identification" / safe_model_id(args.model)
-                    / direction_dataset / args.procedure / f"layer_{args.layer}" / args.position / "direction.pt")
-        direction = torch.load(dir_path, map_location="cpu").float()
-        if normalize_direction:
-            direction = direction / (direction.norm())
-        logger.info(f"Loaded direction from {dir_path}")
+            s_proj_norm_global = zscore(s_proj_all)
 
-        sbert_cache = out_dir / "sbert_embeddings.pt"
-        sbert_enc = SentenceTransformer(args.sbert_model)
-        if sbert_cache.exists():
-            logger.info("Loading cached SBERT embeddings")
-            sbert_emb = torch.load(sbert_cache, map_location="cpu")
-        else:
-            logger.info("Computing SBERT embeddings ...")
-            emb = sbert_enc.encode(all_docs, batch_size=64, show_progress_bar=True, convert_to_numpy=True)
-            sbert_emb = torch.tensor(emb, dtype=torch.float32)
-            torch.save(sbert_emb, sbert_cache)
-            logger.info(f"Saved SBERT embeddings -> {sbert_cache}")
+            records = []
+            for si, sample in enumerate(tqdm(samples, desc="Evaluating")):
+                # Get the index of the gold document and the non-factual document in the corpus from the all_docs list
+                gold_idx = doc_idx[sample["factual_context"]]
+                nf_idx = doc_idx[sample["non_factual_evidence"]]
 
-        llm_cache = out_dir / "llm_hidden_states.pt"
-        if llm_cache.exists():
-            logger.info("Loading cached LLM hidden states")
-            llm_hidden = torch.load(llm_cache, map_location="cpu")
-        else:
-            logger.info("Computing LLM hidden states ...")
-            device = tl_utils.get_device()
-            model = HookedTransformer.from_pretrained(args.model, device=device, dtype="bfloat16")
-            model.eval()
-            hook_point = tl_utils.get_act_name("resid_post", args.layer)
-            llm_hidden = compute_llm_hidden_states(model, all_docs, hook_point, args.batch_size)
-            torch.save(llm_hidden, llm_cache)
-            logger.info(f"Saved LLM hidden states -> {llm_cache}")
-            del model
+                s_cos = (sbert_norm @ q_embs_norm[si]).numpy()  # [N]
+                s_cos_norm = zscore(s_cos)
 
-        s_proj_all = (llm_hidden @ direction).numpy()  # [N]
-        sbert_norm = sbert_emb / (sbert_emb.norm(dim=1, keepdim=True))  # [N, dim]
+                for alpha in args.alphas:
+                    scores = (1 - alpha) * s_cos_norm + alpha * s_proj_norm_global
+                    sorted_indices = np.argsort(-scores)  # descending, no Python sort. List of indices of documents (index coming from all_docs-> embedded in SBERT and hidden states -> combination of scores against the query)
+                    gold_rank = np.where(sorted_indices == gold_idx)[0][0] + 1
+                    nf_rank   = np.where(sorted_indices == nf_idx)[0][0] + 1
+                    # [OLD] now we need to compute the rank of the gold document and the non-factual document
+                    # in the sorted scores the first element is the rank 1 element, the second element is the rank 2 element, etc.
+                    # we just neet to find the position in sorted_score where x[1] == gold_idx or x[1] == nf_idx
+                    #gold_rank = int((scores > scores[gold_idx]).sum()) + 1
+                    #nf_rank = int((scores > scores[nf_idx]).sum()) + 1
+                    for k in args.ks:
+                        gold_in_topk = bool(gold_rank <= k)
+                        nf_in_topk = bool(nf_rank <= k)
+                        topk_indices = sorted_indices[:k].tolist()
+                        records.append({
+                            "sample_idx": si,
+                            "question": sample["question"],
+                            "alpha": alpha,
+                            "k": k,
+                            "gold_in_topk": gold_in_topk,
+                            "nonfactual_in_topk": nf_in_topk,
+                            "gold_rank": int(gold_rank),
+                            "nonfactual_rank": int(nf_rank),
+                            "topk_text": [text for idx in topk_indices for text, doc_id in doc_idx.items() if idx == doc_id],
+                            "topk_indices": topk_indices,
+                        })
 
-        logger.info("Encoding queries with SBERT ...")
-        q_embs = sbert_enc.encode([s["question"] for s in samples], batch_size=64,
-                                show_progress_bar=True, convert_to_numpy=True)
-        q_embs_norm = torch.tensor(q_embs, dtype=torch.float32)
-        q_embs_norm = q_embs_norm / (q_embs_norm.norm(dim=1, keepdim=True))
+            results_path = out_dir / "results.jsonl"
+            docs_path = out_dir / "docs.jsonl"
 
-        s_proj_norm_global = zscore(s_proj_all)
+            write_jsonl(results_path, records)
+            # Save also the mapping from document index to document text, with assert to ensure ids are unique
+            id_to_doc = {doc_id: text for text, doc_id in doc_idx.items()}
+            assert len(id_to_doc) == len(all_docs)
+            write_jsonl(docs_path, list(id_to_doc.items()))
 
-        records = []
-        for si, sample in enumerate(tqdm(samples, desc="Evaluating")):
-            # Get the index of the gold document and the non-factual document in the corpus from the all_docs list
-            gold_idx = doc_idx[sample["factual_context"]]
-            nf_idx = doc_idx[sample["non_factual_evidence"]]
-
-            s_cos = (sbert_norm @ q_embs_norm[si]).numpy()  # [N]
-            s_cos_norm = zscore(s_cos)
+            logger.info(f"Wrote {len(records)} records -> {results_path}")
+            logger.info(f"Wrote {len(all_docs)} docs -> {docs_path}")
 
             for alpha in args.alphas:
-                scores = (1 - alpha) * s_cos_norm + alpha * s_proj_norm_global
-                sorted_indices = np.argsort(-scores)  # descending, no Python sort. List of indices of documents (index coming from all_docs-> embedded in SBERT and hidden states -> combination of scores against the query)
-                gold_rank = np.where(sorted_indices == gold_idx)[0][0] + 1
-                nf_rank   = np.where(sorted_indices == nf_idx)[0][0] + 1
-                # [OLD] now we need to compute the rank of the gold document and the non-factual document
-                # in the sorted scores the first element is the rank 1 element, the second element is the rank 2 element, etc.
-                # we just neet to find the position in sorted_score where x[1] == gold_idx or x[1] == nf_idx
-                #gold_rank = int((scores > scores[gold_idx]).sum()) + 1
-                #nf_rank = int((scores > scores[nf_idx]).sum()) + 1
                 for k in args.ks:
-                    gold_in_topk = bool(gold_rank <= k)
-                    nf_in_topk = bool(nf_rank <= k)
-                    topk_indices = sorted_indices[:k].tolist()
-                    records.append({
-                        "sample_idx": si,
-                        "question": sample["question"],
-                        "alpha": alpha,
-                        "k": k,
-                        "gold_in_topk": gold_in_topk,
-                        "nonfactual_in_topk": nf_in_topk,
-                        "gold_rank": int(gold_rank),
-                        "nonfactual_rank": int(nf_rank),
-                        "topk_text": [text for idx in topk_indices for text, doc_id in doc_idx.items() if idx == doc_id],
-                        "topk_indices": topk_indices,
-                    })
+                    rows = [r for r in records if r["alpha"] == alpha and r["k"] == k]
+                    gold_rate = sum(r["gold_in_topk"] for r in rows) / len(rows)
+                    nf_rate = sum(r["nonfactual_in_topk"] for r in rows) / len(rows)
+                    logger.info(f"alpha={alpha:.1f} k={k:2d} | gold_rate@k={gold_rate:.3f} | nonfactual_rate@k={nf_rate:.3f}")
 
-        results_path = out_dir / "results.jsonl"
-        docs_path = out_dir / "docs.jsonl"
-
-        write_jsonl(results_path, records)
-        # Save also the mapping from document index to document text, with assert to ensure ids are unique
-        id_to_doc = {doc_id: text for text, doc_id in doc_idx.items()}
-        assert len(id_to_doc) == len(all_docs)
-        write_jsonl(docs_path, list(id_to_doc.items()))
-
-        logger.info(f"Wrote {len(records)} records -> {results_path}")
-        logger.info(f"Wrote {len(all_docs)} docs -> {docs_path}")
-
-        for alpha in args.alphas:
-            for k in args.ks:
-                rows = [r for r in records if r["alpha"] == alpha and r["k"] == k]
-                gold_rate = sum(r["gold_in_topk"] for r in rows) / len(rows)
-                nf_rate = sum(r["nonfactual_in_topk"] for r in rows) / len(rows)
-                logger.info(f"alpha={alpha:.1f} k={k:2d} | gold_rate@k={gold_rate:.3f} | nonfactual_rate@k={nf_rate:.3f}")
-
-        logger.info("Done.")
+            logger.info("Done.")
 
 
 if __name__ == "__main__":

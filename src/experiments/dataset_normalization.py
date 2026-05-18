@@ -108,19 +108,24 @@ def main() -> None:
                         help="Path to the ConflictQA CSV file.")
     parser.add_argument("--train_frac", type=float, default=0.8,
                         help="Fraction of unique questions assigned to train split.")
+    parser.add_argument("--seeds", type=int, nargs="+", default=[7, 42, 67, 89, 90],
+                        help="List of random seeds for train/test splitting.")
     args = parser.parse_args()
 
     setup_logging("dataset_normalization", NORMALIZED_DIR)
 
-    for dataset_id, rows in [
-        ("nq_swap", normalize_nq_swap(split=args.nq_swap_split)),
-        ("conflictqa", normalize_conflictqa(Path(args.conflictqa_csv))),
-    ]:
-        splits = make_split(rows, train_frac=args.train_frac)
-        for split_name, split_rows in splits.items():
-            path = NORMALIZED_DIR / dataset_id / f"{split_name}.jsonl"
-            write_jsonl(path, split_rows)
-            logger.info(f"Wrote {len(split_rows)} {split_name} samples -> {path}")
+    # Normalize once, then split for each seed.
+    nq_rows = normalize_nq_swap(split=args.nq_swap_split)
+    cqa_rows = normalize_conflictqa(Path(args.conflictqa_csv))
+
+    for seed in args.seeds:
+        logger.info(f"=== Seed {seed} ===")
+        for dataset_id, rows in [("nq_swap", nq_rows), ("conflictqa", cqa_rows)]:
+            splits = make_split(rows, train_frac=args.train_frac, seed=seed)
+            for split_name, split_rows in splits.items():
+                path = NORMALIZED_DIR / dataset_id / f"seed_{seed}" / f"{split_name}.jsonl"
+                write_jsonl(path, split_rows)
+                logger.info(f"Wrote {len(split_rows)} {split_name} samples -> {path}")
 
 
 if __name__ == "__main__":

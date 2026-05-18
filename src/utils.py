@@ -55,9 +55,9 @@ class NormalizedDataset:
         return self._splits[split]
 
 
-def load_normalized(dataset_id: str) -> NormalizedDataset:
-    """Loads train/test splits from `data/normalized_dataset/<id>/{train,test}.jsonl`."""
-    base = NORMALIZED_DIR / dataset_id
+def load_normalized(dataset_id: str, seed: int = 42) -> NormalizedDataset:
+    """Loads train/test splits from `data/normalized_dataset/<id>/seed_<seed>/{train,test}.jsonl`."""
+    base = NORMALIZED_DIR / dataset_id / f"seed_{seed}"
     splits: Dict[str, List[Dict]] = {}
     for name in ("train", "test"):
         path = base / f"{name}.jsonl"

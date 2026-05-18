@@ -37,6 +37,7 @@ from tqdm import tqdm
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 from src.utils import (
+    NORMALIZED_DIR,
     RESULTS_DIR,
     diff_in_means,
     get_last_residual,
@@ -63,6 +64,11 @@ AB_CHOICE_SEED = 42
 
 def parse_layers(s: str) -> List[int]:
     return [int(x) for x in s.split(",") if x.strip()]
+
+
+def discover_seeds(dataset: str) -> List[int]:
+    dirs = sorted((NORMALIZED_DIR / dataset).glob("seed_*"), key=lambda d: int(d.name.split("_")[1]))
+    return [int(d.name.split("_")[1]) for d in dirs if d.is_dir()]
 
 
 def collect_context_only(
@@ -156,15 +162,19 @@ def main() -> None:
                         help="Normalized dataset id.")
     parser.add_argument("--layers", required=True, type=parse_layers,
                         help="Comma-separated list of layers, e.g. '10,15,20'.")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Split seed. If omitted, runs for all seeds found in the normalized dataset.")
     args = parser.parse_args()
 
-    out_root = RESULTS_DIR / "direction_identification" / safe_model_id(args.model) / args.dataset
-    out_root.mkdir(parents=True, exist_ok=True)
-    setup_logging("direction_identification", out_root)
-    logger.info(f"model={args.model} | dataset={args.dataset} | layers={args.layers}")
+    seeds = [args.seed] if args.seed is not None else discover_seeds(args.dataset)
+    if not seeds:
+        logger.error(f"No seed directories found for '{args.dataset}'. Run dataset_normalization.py first.")
+        return
 
-    samples = load_normalized(args.dataset)["train"]
-    logger.info(f"Loaded {len(samples)} train samples for '{args.dataset}'.")
+    log_root = RESULTS_DIR / "direction_identification" / safe_model_id(args.model) / args.dataset
+    log_root.mkdir(parents=True, exist_ok=True)
+    setup_logging("direction_identification", log_root)
+    logger.info(f"model={args.model} | dataset={args.dataset} | layers={args.layers} | seeds={seeds}")
 
     device = tl_utils.get_device()
     logger.info(f"Loading model on {device} ...")
@@ -173,37 +183,43 @@ def main() -> None:
     ctx_positions = CONTEXT_ONLY_POSITIONS[args.dataset]
     want_entity_pos = "entity_pos" in ctx_positions
 
-    for layer in args.layers:
-        hook_point = tl_utils.get_act_name("resid_post", layer)
-        logger.info(f"=== Layer {layer} ({hook_point}) ===")
+    for seed in seeds:
+        logger.info(f"=== Seed {seed} ===")
+        samples = load_normalized(args.dataset, seed)["train"]
+        logger.info(f"Loaded {len(samples)} train samples.")
+        out_root = RESULTS_DIR / "direction_identification" / safe_model_id(args.model) / args.dataset / f"seed_{seed}"
 
-        # Procedure 1: context_only
-        logger.info("-> procedure: context_only")
-        ctx_acts = collect_context_only(model, hook_point, samples, want_entity_pos=want_entity_pos)
-        for pos_name in ctx_positions:
-            if pos_name not in ctx_acts:
-                logger.warning(f"Skipping {pos_name}: no activations collected.")
-                continue
-            stacks = ctx_acts[pos_name]
-            direction = diff_in_means(stacks["pos"], stacks["neg"], normalize=False)
-            save_direction(
-                out_root / "context_only" / f"layer_{layer}" / pos_name,
-                direction, stacks["pos"], stacks["neg"],
-                {"model": args.model, "dataset": args.dataset, "layer": layer,
-                 "procedure": "context_only", "position": pos_name},
-            )
+        for layer in args.layers:
+            hook_point = tl_utils.get_act_name("resid_post", layer)
+            logger.info(f"=== Layer {layer} ({hook_point}) ===")
 
-        # Procedure 2: ab_choice
-        logger.info("-> procedure: ab_choice")
-        ab_acts = collect_ab_choice(model, hook_point, samples)
-        for pos_name, stacks in ab_acts.items():
-            direction = diff_in_means(stacks["pos"], stacks["neg"], normalize=False)
-            save_direction(
-                out_root / "ab_choice" / f"layer_{layer}" / pos_name,
-                direction, stacks["pos"], stacks["neg"],
-                {"model": args.model, "dataset": args.dataset, "layer": layer,
-                 "procedure": "ab_choice", "position": pos_name, "ab_seed": AB_CHOICE_SEED},
-            )
+            # Procedure 1: context_only
+            logger.info("-> procedure: context_only")
+            ctx_acts = collect_context_only(model, hook_point, samples, want_entity_pos=want_entity_pos)
+            for pos_name in ctx_positions:
+                if pos_name not in ctx_acts:
+                    logger.warning(f"Skipping {pos_name}: no activations collected.")
+                    continue
+                stacks = ctx_acts[pos_name]
+                direction = diff_in_means(stacks["pos"], stacks["neg"], normalize=False)
+                save_direction(
+                    out_root / "context_only" / f"layer_{layer}" / pos_name,
+                    direction, stacks["pos"], stacks["neg"],
+                    {"model": args.model, "dataset": args.dataset, "layer": layer, "seed": seed,
+                     "procedure": "context_only", "position": pos_name},
+                )
+
+            # Procedure 2: ab_choice
+            logger.info("-> procedure: ab_choice")
+            ab_acts = collect_ab_choice(model, hook_point, samples)
+            for pos_name, stacks in ab_acts.items():
+                direction = diff_in_means(stacks["pos"], stacks["neg"], normalize=False)
+                save_direction(
+                    out_root / "ab_choice" / f"layer_{layer}" / pos_name,
+                    direction, stacks["pos"], stacks["neg"],
+                    {"model": args.model, "dataset": args.dataset, "layer": layer, "seed": seed,
+                     "procedure": "ab_choice", "position": pos_name, "ab_seed": AB_CHOICE_SEED},
+                )
 
     logger.info("Done.")
 
