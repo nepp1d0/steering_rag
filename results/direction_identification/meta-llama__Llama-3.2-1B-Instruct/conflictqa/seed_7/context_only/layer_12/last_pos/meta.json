@@ -1,0 +1,12 @@
+{
+  "method": "diff_in_means",
+  "n_samples": 7312,
+  "d_model": 2048,
+  "norm_pre_normalize": 4.71875,
+  "model": "meta-llama/Llama-3.2-1B-Instruct",
+  "dataset": "conflictqa",
+  "layer": 12,
+  "seed": 7,
+  "procedure": "context_only",
+  "position": "last_pos"
+}
