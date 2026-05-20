@@ -1,0 +1,12 @@
+{
+  "method": "diff_in_means",
+  "n_samples": 1356,
+  "d_model": 2560,
+  "norm_pre_normalize": 65.5,
+  "model": "google/gemma-3-4b-it",
+  "dataset": "nq_swap",
+  "layer": 13,
+  "seed": 42,
+  "procedure": "context_only",
+  "position": "last_pos"
+}
