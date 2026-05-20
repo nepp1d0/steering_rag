@@ -1,0 +1,13 @@
+{
+  "method": "diff_in_means",
+  "n_samples": 7312,
+  "d_model": 4096,
+  "norm_pre_normalize": 0.1318359375,
+  "model": "meta-llama/Llama-3.1-8B-Instruct",
+  "dataset": "conflictqa",
+  "layer": 7,
+  "seed": 7,
+  "procedure": "ab_choice",
+  "position": "choice_token",
+  "ab_seed": 42
+}
