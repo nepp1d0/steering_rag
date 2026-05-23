@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import random
 import sys
 from pathlib import Path
@@ -81,6 +82,7 @@ def normalize_conflictqa(csv_path: Path) -> List[Dict]:
             "factual_context": str(factual_ctx),
             "non_factual_answer": [str(non_factual_ans)],
             "non_factual_evidence": str(non_factual_ctx),
+            "ground_truth": ast.literal_eval(r["ground_truth"]),
             "original_dataset_id": "conflictqa",
         })
     logger.info(f"ConflictQA: kept {len(rows)} XOR samples.")
