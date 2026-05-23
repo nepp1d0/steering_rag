@@ -430,6 +430,7 @@ FodyWeavers.xsd
 
 .vscode/
 CLAUDE.md
+CLAUDE.local.md
 .claude/
 
 # Large model artifacts from retrieval evaluation (do not commit)
