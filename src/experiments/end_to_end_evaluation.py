@@ -20,15 +20,20 @@ from __future__ import annotations
 
 import gc
 import json
+import os
 import sys
 from pathlib import Path
 
 import numpy as np
 import torch
 
+# vLLM resolves device_config=cuda in the parent (initializing a CUDA context), then
+# launches its EngineCore worker. Force that worker to spawn (fresh process) rather than
+# fork, otherwise the forked child inherits the context and dies on cudaErrorInitializationError.
+os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 from src.utils import RESULTS_DIR, load_normalized, logger, safe_model_id, setup_logging, write_jsonl
-from src.experiments.retrieval_evaluation import discover_direction_seeds, zscore
 
 from sentence_transformers import SentenceTransformer
 from vllm import LLM, SamplingParams
@@ -44,6 +49,15 @@ SBERT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 MAX_NEW_TOKENS = 64
 MAX_MODEL_LEN = 8192
 MIN_ALIAS_LEN = 4                      # drop very short aliases (e.g. "pol") to avoid false matches
+
+
+def discover_direction_seeds(model_id: str, dataset: str) -> list[int]:
+    root = RESULTS_DIR / "direction_identification" / safe_model_id(model_id) / dataset
+    return [int(d.name.split("_")[1]) for d in sorted(root.glob("seed_*")) if d.is_dir()]
+
+
+def zscore(x: np.ndarray) -> np.ndarray:
+    return (x - x.mean()) / (x.std())
 
 
 def build_prompt(docs: list[str], question: str) -> str:

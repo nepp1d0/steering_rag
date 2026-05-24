@@ -146,16 +146,16 @@ def score_layer(metrics: list[dict]) -> tuple[float, float | None]:
     """Best steering configuration for a layer: for each alpha>0 score it against the
     alpha=0 baseline (meaned across seeds and k), then keep the best alpha.
 
-    Returns (score, best_alpha). The score sums three terms, each in [-1, 1] so they
-    add without weights and each maps to one diagnostic panel:
-      gold_lift  = gold_rate(a) - gold_rate(0)            (panel 1, higher better)
-      nf_drop    = nf_rate(0)   - nf_rate(a)              (panel 2, higher better)
-      rank_sep   = (nf_rank - gold_rank)/(nf_rank+gold_rank)  (panel 3, factual ranked above)
+    Returns (score, best_alpha). The score sums two top-k recall terms, each in [-1, 1]:
+      gold_lift  = gold_rate(a) - gold_rate(0)   (panel 1, higher better)
+      nf_drop    = nf_rate(0)   - nf_rate(a)     (panel 2, higher better)
+    A global rank-separation term was deliberately dropped: it is query-independent at
+    alpha=1 (pure projection -> same ranking for every question) and rewarded that
+    degenerate config despite near-zero top-k recall, which tanks end-to-end accuracy.
     """
     alphas = metrics[0]["alphas"]
     ks = metrics[0]["ks"]
     steer = [a for a in alphas if a > 0]
-    has_rank = all(m["has_rank"] for m in metrics)
 
     best_score, best_alpha = float("-inf"), None
     for a in steer:
@@ -163,13 +163,7 @@ def score_layer(metrics: list[dict]) -> tuple[float, float | None]:
                              for m in metrics for k in ks])
         nf_drop = np.mean([m["nf_rate"][(0.0, k)] - m["nf_rate"][(a, k)]
                            for m in metrics for k in ks])
-        if has_rank:
-            rank_sep = np.mean([(m["mean_nf_rank"][a] - m["mean_gold_rank"][a]) /
-                                (m["mean_nf_rank"][a] + m["mean_gold_rank"][a])
-                                for m in metrics])
-        else:
-            rank_sep = 0.0
-        s = float(gold_lift + nf_drop + rank_sep)
+        s = float(gold_lift + nf_drop)
         if s > best_score:
             best_score, best_alpha = s, a
     return best_score, best_alpha
@@ -203,7 +197,7 @@ def write_top_layers(results_files: list[Path]) -> None:
         *prefix, procedure = gkey
         out_path = RESULTS_DIR / "retrieval_evaluation" / Path(*prefix) / f"top_layers_{procedure}.json"
         out_path.write_text(json.dumps(
-            {"group": "/".join(gkey), "top5": scored[:5], "ranking": scored}, indent=2))
+            {"group": "/".join(gkey), "top2": scored[:2], "ranking": scored}, indent=2))
         print(f"Wrote {out_path}  (best: layer {scored[0]['layer']} "
               f"@ alpha={scored[0]['best_alpha']}, score={scored[0]['score']})")
 

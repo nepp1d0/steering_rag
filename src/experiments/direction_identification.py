@@ -231,7 +231,7 @@ def main() -> None:
 
     device = tl_utils.get_device()
     logger.info(f"Loading model on {device} ...")
-    model = HookedTransformer.from_pretrained(args.model, device=device, dtype="bfloat16")
+    model = HookedTransformer.from_pretrained_no_processing(args.model, device=device, dtype="bfloat16")
     layers = args.layers if args.layers is not None else list(range(model.cfg.n_layers))
     logger.info(f"Layers: {layers}")
 
