@@ -1,0 +1,12 @@
+{
+  "method": "diff_in_means",
+  "n_samples": 1350,
+  "d_model": 3584,
+  "norm_pre_normalize": 10.25,
+  "model": "Qwen/Qwen2-7B-Instruct",
+  "dataset": "nq_swap",
+  "layer": 16,
+  "seed": 67,
+  "procedure": "context_only",
+  "position": "entity_pos"
+}
