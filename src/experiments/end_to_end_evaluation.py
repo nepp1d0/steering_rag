@@ -89,13 +89,13 @@ def load_cache(retrieval_dir: Path) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 def load_top_layers(model_name: str, direction_dataset: str) -> list[dict]:
-    """Read top_layers_<procedure>.json written by plot_retrieval_evaluation.py."""
-    path = (RESULTS_DIR / "retrieval_evaluation" / safe_model_id(model_name) / EVAL_DATASET
+    """Read top_layers_<procedure>.json from top_retrieval_evaluation; return only the single best layer."""
+    path = (RESULTS_DIR / "top_retrieval_evaluation" / safe_model_id(model_name) / EVAL_DATASET
             / direction_dataset / NORMALIZE / f"top_layers_{PROCEDURE}.json")
     if not path.exists():
         logger.warning(f"No top-layers file ({path}); run plot_retrieval_evaluation first. Skipping.")
         return []
-    return json.loads(path.read_text())["top5"]
+    return json.loads(path.read_text())["ranking"][:1]
 
 
 def generate(llm: LLM, contents: list[str], sampling: SamplingParams) -> tuple[list[str], list[str]]:
@@ -146,7 +146,7 @@ def main() -> None:
                                 / f"layer_{layer}" / POSITION / "direction.pt")
                     direction = torch.load(dir_path, map_location="cpu").float()
 
-                    retrieval_dir = (RESULTS_DIR / "retrieval_evaluation" / safe_model_id(model_name)
+                    retrieval_dir = (RESULTS_DIR / "top_retrieval_evaluation" / safe_model_id(model_name)
                                      / EVAL_DATASET / direction_dataset / NORMALIZE
                                      / f"seed_{seed}" / PROCEDURE / f"layer_{layer}")
                     sbert_emb, llm_hidden = load_cache(retrieval_dir)

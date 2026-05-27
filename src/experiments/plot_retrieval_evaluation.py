@@ -16,6 +16,8 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
+import shutil
+
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -197,9 +199,50 @@ def write_top_layers(results_files: list[Path]) -> None:
         *prefix, procedure = gkey
         out_path = RESULTS_DIR / "retrieval_evaluation" / Path(*prefix) / f"top_layers_{procedure}.json"
         out_path.write_text(json.dumps(
-            {"group": "/".join(gkey), "top2": scored[:2], "ranking": scored}, indent=2))
+            {"group": "/".join(gkey), "top5": scored[:5], "ranking": scored}, indent=2))
         print(f"Wrote {out_path}  (best: layer {scored[0]['layer']} "
               f"@ alpha={scored[0]['best_alpha']}, score={scored[0]['score']})")
+
+
+def copy_top_results() -> None:
+    """Copy the best-layer seed dirs for each group into top_retrieval_evaluation/.
+
+    Reads existing top_layers_*.json files (written by write_top_layers), so call
+    this after write_top_layers has run. Mirrors the retrieval_evaluation structure
+    but keeps only the single best-scoring layer per (model, eval, direction, normalize,
+    procedure) group.
+    """
+    TOP_DIR = RESULTS_DIR / "top_retrieval_evaluation"
+    json_files = sorted((RESULTS_DIR / "retrieval_evaluation").rglob("top_layers_*.json"))
+    print(f"Found {len(json_files)} top_layers JSON files for copying.")
+
+    for json_path in json_files:
+        data = json.loads(json_path.read_text())
+        best = data["ranking"][0]
+        if best["best_alpha"] is None:
+            print(f"Skip (no valid alpha): {json_path}")
+            continue
+        best_layer = best["layer"]
+        procedure = json_path.stem.replace("top_layers_", "")
+
+        normalize_dir = json_path.parent  # .../model/eval/direction/normalize/
+        for seed_dir in sorted(normalize_dir.glob("seed_*")):
+            src = seed_dir / procedure / f"layer_{best_layer}"
+            if not src.exists():
+                print(f"Warning: dir not found: {src}")
+                continue
+            dst = TOP_DIR / src.relative_to(RESULTS_DIR / "retrieval_evaluation")
+            if dst.exists():
+                print(f"Skip (exists): {dst}")
+                continue
+            shutil.copytree(src, dst)
+            print(f"Copied -> {dst}")
+
+        dst_json = TOP_DIR / json_path.relative_to(RESULTS_DIR / "retrieval_evaluation")
+        if not dst_json.exists():
+            dst_json.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(json_path, dst_json)
+            print(f"Copied json -> {dst_json}")
 
 
 def _agg(values: list[float]) -> tuple[float, float]:
@@ -290,6 +333,9 @@ def main() -> None:
 
     # Per-group layer ranking (best alpha per layer, across seeds) -> top_layers_*.json.
     write_top_layers(results_files)
+
+    # Copy best-layer dirs to top_retrieval_evaluation/ for version control.
+    copy_top_results()
 
 
 if __name__ == "__main__":

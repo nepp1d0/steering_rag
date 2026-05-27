@@ -29,7 +29,8 @@ from transformer_lens import HookedTransformer
 from sentence_transformers import SentenceTransformer
 
 #MODELS = ["meta-llama/Llama-3.1-8B-Instruct", "google/gemma-3-4b-it"]
-MODELS = ["meta-llama/Llama-3.1-8B-Instruct", "meta-llama/Llama-3.2-1B-Instruct", "google/gemma-3-4b-it"]
+#MODELS = ["meta-llama/Llama-3.1-8B-Instruct", "meta-llama/Llama-3.2-1B-Instruct", "google/gemma-3-4b-it"]
+MODELS = ["Qwen/Qwen2-7B-Instruct"]
 DATASETS = ["nq_swap", "conflictqa"]
 DIRECTION_DATASETS = ["nq_swap", "conflictqa"]
 PROCEDURES = ["context_only"] #, "ab_choice"]
@@ -234,7 +235,7 @@ def main() -> None:
                     logger.info("Computing LLM hidden states ...")
                     llm_cache = out_dir / "llm_hidden_states.pt"
                     device = tl_utils.get_device()
-                    model = HookedTransformer.from_pretrained(model_name, device=device, dtype="bfloat16")
+                    model = HookedTransformer.from_pretrained_no_processing(model_name, device=device, dtype="bfloat16")
                     model.eval()
                     hook_point = tl_utils.get_act_name("resid_post", layer)
                     llm_hidden = compute_llm_hidden_states(model, all_docs, hook_point, BATCH_SIZE)
@@ -289,7 +290,7 @@ def main() -> None:
             else:
                 logger.info("Computing LLM hidden states ...")
                 device = tl_utils.get_device()
-                model = HookedTransformer.from_pretrained(args.model, device=device, dtype="bfloat16")
+                model = HookedTransformer.from_pretrained_no_processing(args.model, device=device, dtype="bfloat16")
                 model.eval()
                 hook_point = tl_utils.get_act_name("resid_post", args.layer)
                 llm_hidden = compute_llm_hidden_states(model, all_docs, hook_point, args.batch_size)
