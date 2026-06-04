@@ -38,7 +38,7 @@ from src.utils import RESULTS_DIR, load_normalized, logger, safe_model_id, setup
 from sentence_transformers import SentenceTransformer
 from vllm import LLM, SamplingParams
 
-MODELS = ["meta-llama/Llama-3.1-8B-Instruct", "meta-llama/Llama-3.2-1B-Instruct", "google/gemma-3-4b-it"]
+MODELS = ["meta-llama/Llama-3.1-8B-Instruct", "meta-llama/Llama-3.2-1B-Instruct", "google/gemma-3-4b-it", "Qwen/Qwen2-7B-Instruct"]
 EVAL_DATASET = "conflictqa"            # ground-truth aliases are ConflictQA-specific
 DIRECTION_DATASETS = ["nq_swap", "conflictqa"]
 PROCEDURE = "context_only"
