@@ -89,9 +89,9 @@ def load_cache(retrieval_dir: Path) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 def load_top_layers(model_name: str, direction_dataset: str) -> list[dict]:
-    """Read top_layers_<procedure>.json from top_retrieval_evaluation; return only the single best layer."""
+    """Read top_layers_<procedure>_<position>.json from top_retrieval_evaluation; return only the single best layer."""
     path = (RESULTS_DIR / "top_retrieval_evaluation" / safe_model_id(model_name) / EVAL_DATASET
-            / direction_dataset / NORMALIZE / f"top_layers_{PROCEDURE}.json")
+            / direction_dataset / NORMALIZE / f"top_layers_{PROCEDURE}_{POSITION}.json")
     if not path.exists():
         logger.warning(f"No top-layers file ({path}); run plot_retrieval_evaluation first. Skipping.")
         return []

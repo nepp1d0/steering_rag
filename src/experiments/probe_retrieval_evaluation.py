@@ -1,25 +1,24 @@
 """
-Retrieval evaluation: fuse SBERT cosine similarity with LLM factuality-direction projection.
+Retrieval evaluation for the LOGISTIC-REGRESSION PROBE directions
+(see probe_direction_identification.py).
 
-score(d, q) = (1 - alpha) * zscore(s_cos) + alpha * zscore(s_proj)
+Identical to retrieval_evaluation.py in every respect (same fusion, same caching,
+same per-record schema, same position handling) except the two roots:
 
-Documents are always projected at their LAST token; <position> selects which
-direction (last_pos / entity_pos identification) is loaded and is the leaf of the
-output path:
+  - directions are read from results/probes/direction_identification/...
+  - results are written to  results/probes/retrieval_evaluation/...
 
-    results/retrieval_evaluation/<model>/<eval>/<direction>/<normalize>/seed_<S>/<procedure>/layer_<L>/<position>/results.jsonl
+    <OUT_ROOT>/<model>/<eval>/<direction>/<normalize>/seed_<S>/<procedure>/layer_<L>/<position>/results.jsonl
 
 llm_hidden_states.pt / sbert_embeddings.pt / docs.jsonl live at the layer level and
-are shared by every position (they do not depend on the direction), so evaluating a
-new position on an already-computed layer needs no model forward pass. Cached
-tensors are reused only when docs.jsonl matches the current corpus; otherwise they
-are recomputed from the current dataset files (--force-recompute re-does the
-results, not matching tensors).
+are shared by every position (they do not depend on the direction). Cached tensors are
+reused only when docs.jsonl matches the current corpus; otherwise they are recomputed
+(--force-recompute re-does the results, not matching tensors).
 
 Usage:
-    python -m src.experiments.retrieval_evaluation --automated
-    python -m src.experiments.retrieval_evaluation --automated --force-recompute
-    python -m src.experiments.retrieval_evaluation \
+    python -m src.experiments.probe_retrieval_evaluation --automated
+    python -m src.experiments.probe_retrieval_evaluation --automated --force-recompute
+    python -m src.experiments.probe_retrieval_evaluation \
         --model meta-llama/Llama-3.1-8B-Instruct --dataset nq_swap --layer 15 --position entity_pos
 """
 
@@ -52,15 +51,20 @@ KS = [2, 5, 10]
 SBERT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 BATCH_SIZE = 4
 
+# Probe roots: directions produced by probe_direction_identification.py, results kept
+# in a parallel tree so they never collide with the diff-in-means evaluation.
+DIRECTIONS_ROOT = RESULTS_DIR / "probes" / "direction_identification"
+OUT_ROOT = RESULTS_DIR / "probes" / "retrieval_evaluation"
+
 
 def discover_direction_seeds(model_id: str, dataset: str) -> List[int]:
-    root = RESULTS_DIR / "direction_identification" / safe_model_id(model_id) / dataset
+    root = DIRECTIONS_ROOT / safe_model_id(model_id) / dataset
     dirs = sorted(root.glob("seed_*"), key=lambda d: int(d.name.split("_")[1]))
     return [int(d.name.split("_")[1]) for d in dirs if d.is_dir()]
 
 
 def discover_layers(model_id: str, dataset: str, procedure: str, position: str, seed: int) -> List[int]:
-    root = RESULTS_DIR / "direction_identification" / safe_model_id(model_id) / dataset / f"seed_{seed}" / procedure
+    root = DIRECTIONS_ROOT / safe_model_id(model_id) / dataset / f"seed_{seed}" / procedure
     return sorted(int(d.name.split("_")[1]) for d in root.glob("layer_*") if (d / position / "direction.pt").exists())
 
 
@@ -188,7 +192,7 @@ def evaluate_combo(model_name: str, dataset: str, direction_dataset: str, proced
                    position: str, seed: int, layer: int, alphas: list[float], ks: list[int],
                    batch_size: int, normalize_direction: bool, normalize_path: str,
                    sbert_model: str, force: bool = False) -> None:
-    layer_dir = (RESULTS_DIR / "retrieval_evaluation" / safe_model_id(model_name)
+    layer_dir = (OUT_ROOT / safe_model_id(model_name)
                  / dataset / direction_dataset / normalize_path / f"seed_{seed}"
                  / procedure / f"layer_{layer}")
     out_dir = layer_dir / position
@@ -196,7 +200,7 @@ def evaluate_combo(model_name: str, dataset: str, direction_dataset: str, proced
         logger.info(f"Skip (exists): {out_dir}")
         return
 
-    dir_path = (RESULTS_DIR / "direction_identification" / safe_model_id(model_name)
+    dir_path = (DIRECTIONS_ROOT / safe_model_id(model_name)
                 / direction_dataset / f"seed_{seed}" / procedure / f"layer_{layer}"
                 / position / "direction.pt")
     if not dir_path.exists():
@@ -204,7 +208,7 @@ def evaluate_combo(model_name: str, dataset: str, direction_dataset: str, proced
         return
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    setup_logging("retrieval_evaluation", out_dir)
+    setup_logging("probe_retrieval_evaluation", out_dir)
     logger.info(f"model={model_name} | dataset={dataset} | direction_dataset={direction_dataset} | "
                 f"seed={seed} | layer={layer} | procedure={procedure} | position={position} | "
                 f"normalize_direction={normalize_direction}")
@@ -261,7 +265,7 @@ def main() -> None:
     ap.add_argument("--sbert-model", default="sentence-transformers/all-MiniLM-L6-v2")
     ap.add_argument("--batch-size", type=int, default=4)
     ap.add_argument("--seed", type=int, default=None,
-                    help="Split seed. If omitted, runs for all seeds found in direction identification results.")
+                    help="Split seed. If omitted, runs for all seeds found in probe direction results.")
     ap.add_argument("--force-recompute", action="store_true",
                     help="Recompute results even if they already exist. Cached tensors are still "
                          "reused when they match the current corpus.")
@@ -288,7 +292,7 @@ def main() -> None:
     else:
         direction_dataset = args.direction_dataset or args.dataset
         seeds = [args.seed] if args.seed is not None else discover_direction_seeds(args.model, direction_dataset)
-        setup_logging("retrieval_evaluation", RESULTS_DIR / "retrieval_evaluation")
+        setup_logging("probe_retrieval_evaluation", OUT_ROOT)
         for seed in seeds:
             evaluate_combo(args.model, args.dataset, direction_dataset, args.procedure, args.position,
                            seed, args.layer, args.alphas, args.ks, args.batch_size,

@@ -1,19 +1,26 @@
 """
-Figure 3b - LLM-as-judge baseline vs. our internal factuality direction.
+Figure 3b for the LOGISTIC-REGRESSION PROBE directions - probe direction vs. LLM-as-judge.
 
-ConflictQA only, each model judges itself. Produces one 2x2 PDF:
+Same layout as plot_figure_3b.py, with the "internal" side coming from the probe tree and
+the judge baseline reused as-is (the LLM-as-judge is method-independent). Emits BOTH
+positions (last_pos, entity_pos).
+
+ConflictQA only, each model judges itself. Produces one 2x2 PDF per position:
   (top-left)     Panel A - gold rank gain at alpha=0.5: internal direction vs judge, per model
   (top-right)    Panel B - per-query verdict on gold rank: internal wins / ties / loses vs judge
   (bottom-left)  Panel C - internal direction score: factual vs non-factual documents (REP_MODEL)
   (bottom-right) Panel D - LLM-judge score: factual vs non-factual documents (REP_MODEL)
 
 Reads:
-  internal  -> results/top_retrieval_evaluation/<model>/<ds>/<ds>/<norm>/seed_*/<proc>/layer_*/<position>/
-  judge     -> results/llms_scoring_evaluation/<model>/<ds>/seed_*/
-  direction -> results/direction_identification/<model>/<ds>/seed_*/<proc>/layer_*/<position>/direction.pt
+  internal  -> results/probes/top_retrieval_evaluation/<model>/<ds>/<ds>/<norm>/seed_*/<proc>/layer_*/<position>/
+  judge     -> results/llms_scoring_evaluation/<model>/<ds>/seed_*/           (method-independent baseline)
+  direction -> results/probes/direction_identification/<model>/<ds>/seed_*/<proc>/layer_*/<position>/direction.pt
+
+Outputs:
+  results/probes/figures/[<DIRECTION_DATASET>/][<position>/]figure_3b_judge_comparison.pdf
 
 Usage:
-    python -m src.experiments.plot_figure_3b
+    python -m src.experiments.probe_plot_figure_3b
 """
 
 from __future__ import annotations
@@ -26,10 +33,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-# Two helpers reused from the retrieval plotting script:
+# Put this script's own dir on sys.path so the bare import below resolves whether the
+# script is run from src/experiments/ or as `python -m src.experiments.probe_plot_figure_3b`.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Two helpers reused from the probe retrieval plotting script:
 #   compute_seed_metrics(path) -> dict with "mean_gold_rank": {alpha: mean rank}, ...
 #   _agg(list_of_values)       -> (mean, std) across seeds
-from plot_retrieval_evaluation import RESULTS_DIR, compute_seed_metrics, _agg
+from probe_plot_retrieval_evaluation import RESULTS_DIR, compute_seed_metrics, _agg  # noqa: E402
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 from src.utils import load_normalized  # noqa: E402
@@ -43,29 +53,32 @@ except Exception:
     HAVE_KDE = False
 
 # ── Config ───────────────────────────────────────────────────────────────────
-TOP_DIR = RESULTS_DIR / "top_retrieval_evaluation"
-JUDGE_DIR = RESULTS_DIR / "llms_scoring_evaluation"
-DIRECTION_DIR = RESULTS_DIR / "direction_identification"
+TOP_DIR = RESULTS_DIR / "probes" / "top_retrieval_evaluation"
+JUDGE_DIR = RESULTS_DIR / "llms_scoring_evaluation"     # method-independent baseline (not under probes/)
+DIRECTION_DIR = RESULTS_DIR / "probes" / "direction_identification"
 DATASET = "conflictqa"     # this comparison is ConflictQA-only
 # Which direction (identification) dataset the internal method uses:
 #   "same"    -> in-domain: direction == eval (reproduces the original figure)
 #   <dataset> -> use that direction (e.g. "longfact") evaluated on DATASET
-DIRECTION_DATASET = "longfact"
+DIRECTION_DATASET = "conflictqa"
 DIRECTION_DS = DATASET if DIRECTION_DATASET == "same" else DIRECTION_DATASET
 NORMALIZE = "unnormalized"
 PROCEDURE = "context_only"
-# Direction position: "last_pos" keeps the original output paths; other positions
-# ("entity_pos") add an extra output level.
-POSITION = "last_pos"
-
-_FIG_DIR = RESULTS_DIR / "figures"
-if DIRECTION_DATASET != "same":
-    _FIG_DIR = _FIG_DIR / DIRECTION_DATASET
-if POSITION != "last_pos":
-    _FIG_DIR = _FIG_DIR / POSITION
-OUT_PATH = _FIG_DIR / "figure_3b_judge_comparison.pdf"
+# Direction positions: both are emitted. "last_pos" keeps the base output path; other
+# positions ("entity_pos") add an extra output level.
+POSITIONS = ["last_pos", "entity_pos"]
 SCATTER_ALPHA = 0.3        # mixing weight used for the head-to-head panels A and B
 REP_MODEL = "meta-llama__Llama-3.1-8B-Instruct"   # model shown in the density panels C/D
+
+
+def out_path_for(position: str) -> Path:
+    fig_dir = RESULTS_DIR / "probes" / "figures"
+    if DIRECTION_DATASET != "same":
+        fig_dir = fig_dir / DIRECTION_DATASET
+    if position != "last_pos":
+        fig_dir = fig_dir / position
+    return fig_dir / "figure_3b_judge_comparison.pdf"
+
 
 # Models listed small -> large; each row is (folder name, short label, size in B params).
 MODELS_BY_SIZE = [
@@ -107,10 +120,10 @@ def standardize(values: np.ndarray) -> np.ndarray:
     return (values - values.mean()) / (values.std() + 1e-8)
 
 
-def internal_seed_paths(model: str) -> list[Path]:
-    """All per-seed results.jsonl files for our internal direction method."""
+def internal_seed_paths(model: str, position: str) -> list[Path]:
+    """All per-seed results.jsonl files for the probe direction method."""
     base = TOP_DIR / model / DATASET / DIRECTION_DS / NORMALIZE
-    return sorted(base.glob(f"seed_*/{PROCEDURE}/layer_*/{POSITION}/results.jsonl"))
+    return sorted(base.glob(f"seed_*/{PROCEDURE}/layer_*/{position}/results.jsonl"))
 
 
 def judge_seed_paths(model: str) -> list[Path]:
@@ -160,13 +173,13 @@ def gold_gain(seed_paths: list[Path]) -> tuple[float, float]:
     return _agg(gains)
 
 
-def per_query_verdict(model: str) -> tuple[float, float, float]:
+def per_query_verdict(model: str, position: str) -> tuple[float, float, float]:
     """For each query, does the internal method rank gold better than the judge?
 
     Returns the percentage of queries where internal wins / ties / loses.
     A lower rank means a better position, so internal wins when its rank is smaller.
     """
-    internal_by_seed = {seed_of(p): p for p in internal_seed_paths(model)}
+    internal_by_seed = {seed_of(p): p for p in internal_seed_paths(model, position)}
     judge_by_seed = {seed_of(p): p for p in judge_seed_paths(model)}
 
     # Only compare seeds that exist for both methods (and drop a missing/None seed).
@@ -216,14 +229,14 @@ def doc_labels(seed: int, docs_path: Path) -> np.ndarray:
     return np.array(labels)
 
 
-def internal_scores(model: str) -> tuple[np.ndarray, np.ndarray]:
-    """Standardized internal direction scores, pooled across seeds.
+def internal_scores(model: str, position: str) -> tuple[np.ndarray, np.ndarray]:
+    """Standardized probe direction scores, pooled across seeds.
 
     Returns (scores for factual docs, scores for non-factual docs).
     Score = (document hidden state) dot (factuality direction).
     """
     factual_scores, nonfactual_scores = [], []
-    for path in internal_seed_paths(model):
+    for path in internal_seed_paths(model, position):
         seed = seed_of(path)
         layer = next((p for p in path.parts if p.startswith("layer_")), None)
         if seed is None or layer is None:
@@ -231,7 +244,7 @@ def internal_scores(model: str) -> tuple[np.ndarray, np.ndarray]:
 
         # results.jsonl sits in the position subdir; shared tensors live one level up (layer dir).
         hidden_p = path.parent.parent / "llm_hidden_states.pt"
-        direction_p = DIRECTION_DIR / model / DIRECTION_DS / f"seed_{seed}" / PROCEDURE / layer / POSITION / "direction.pt"
+        direction_p = DIRECTION_DIR / model / DIRECTION_DS / f"seed_{seed}" / PROCEDURE / layer / position / "direction.pt"
         docs_p = path.parent.parent / "docs.jsonl"
         if not (hidden_p.exists() and direction_p.exists() and docs_p.exists()):
             print(f"  [internal] missing files for seed {seed}, skipping")
@@ -333,7 +346,7 @@ def plot_density(ax, factual, nonfactual, title):
 
 
 # ── Figure ────────────────────────────────────────────────────────────────────
-def make_figure() -> None:
+def make_figure(position: str) -> None:
     plt.rcParams.update(RC)
     fig, axes = plt.subplots(2, 2, figsize=(7.2, 5.2))
     labels = [label for _, label, _ in MODELS_BY_SIZE]
@@ -345,7 +358,7 @@ def make_figure() -> None:
     bar_h = 0.36
     for i, (model, label, _) in enumerate(MODELS_BY_SIZE):
         y = ypos[i]
-        internal_mean, internal_std = gold_gain(internal_seed_paths(model))
+        internal_mean, internal_std = gold_gain(internal_seed_paths(model, position))
         judge_mean, judge_std = gold_gain(judge_seed_paths(model))
         color = COLORS[model]
         axA.barh(y + bar_h / 2, internal_mean, height=bar_h, xerr=internal_std,
@@ -371,7 +384,7 @@ def make_figure() -> None:
     axB = axes[0][1]
     for i, (model, label, _) in enumerate(MODELS_BY_SIZE):
         y = ypos[i]
-        win, tie, loss = per_query_verdict(model)
+        win, tie, loss = per_query_verdict(model, position)
         # Only label the first model's segments so the legend has exactly three entries.
         axB.barh(y, win, color=WIN_C, edgecolor="white", linewidth=0.5, zorder=3,
                  label="internal wins" if i == 0 else None)
@@ -389,23 +402,26 @@ def make_figure() -> None:
 
     # ── Panels C & D — score separability for the representative model ───────
     rep_label = dict((m, l) for m, l, _ in MODELS_BY_SIZE).get(REP_MODEL, REP_MODEL)
-    internal_factual, internal_nonfactual = internal_scores(REP_MODEL)
+    internal_factual, internal_nonfactual = internal_scores(REP_MODEL, position)
     judge_factual, judge_nonfactual = judge_scores(REP_MODEL)
     plot_density(axes[1][0], internal_factual, internal_nonfactual, f"Internal score — {rep_label}")
     plot_density(axes[1][1], judge_factual, judge_nonfactual, f"LLM-judge score — {rep_label}")
 
     direction_note = "" if DIRECTION_DATASET == "same" else f" ({DIRECTION_DS} direction)"
-    fig.suptitle(f"ConflictQA — internal factuality direction{direction_note} vs. LLM-as-judge",
+    position_note = "" if position == "last_pos" else f" [{position}]"
+    fig.suptitle(f"ConflictQA — probe factuality direction{direction_note} vs. LLM-as-judge{position_note}",
                  fontsize=10, y=1.02)
     fig.tight_layout(pad=0.9)
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(OUT_PATH, bbox_inches="tight")
+    out_path = out_path_for(position)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, bbox_inches="tight")
     plt.close(fig)
-    print(f"Wrote {OUT_PATH}")
+    print(f"Wrote {out_path}")
 
 
 def main() -> None:
-    make_figure()
+    for position in POSITIONS:
+        make_figure(position)
 
 
 if __name__ == "__main__":

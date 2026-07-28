@@ -437,3 +437,7 @@ CLAUDE.local.md
 results/retrieval_evaluation/**/****/**/**/*.pt
 # Old heavy experiments (do not commit)
 results/retrieval_evaluation/FULL_*
+results/*
+
+src/other_methods/
+benchmark/

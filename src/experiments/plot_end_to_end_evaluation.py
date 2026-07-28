@@ -24,6 +24,7 @@ import numpy as np
 RESULTS_DIR = Path(__file__).resolve().parents[2] / "results"
 E2E_DIR = RESULTS_DIR / "end_to_end_evaluation"
 PROCEDURE = "context_only"
+POSITION = "last_pos"
 SEED_RE = re.compile(r"seed_(\d+)")
 LAYER_RE = re.compile(r"layer_(\d+)")
 
@@ -46,7 +47,7 @@ def file_accuracies(path: Path) -> tuple[float, list[int], dict[int, float], dic
 
 def layer_rank_order(gkey: tuple) -> list[int]:
     """Layers ordered by retrieval score (from the matching top_layers file); [] if absent."""
-    path = RESULTS_DIR / "retrieval_evaluation" / Path(*gkey) / f"top_layers_{PROCEDURE}.json"
+    path = RESULTS_DIR / "retrieval_evaluation" / Path(*gkey) / f"top_layers_{PROCEDURE}_{POSITION}.json"
     if not path.exists():
         return []
     return [e["layer"] for e in json.loads(path.read_text())["top5"]]

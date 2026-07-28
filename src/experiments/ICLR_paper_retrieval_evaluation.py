@@ -1,26 +1,35 @@
 """
-Retrieval evaluation: fuse SBERT cosine similarity with LLM factuality-direction projection.
+Retrieval evaluation using the ICLR "LLMs Know More Than They Show" probe directions.
 
-score(d, q) = (1 - alpha) * zscore(s_cos) + alpha * zscore(s_proj)
+Same fusion as src/experiments/retrieval_evaluation.py:
+    score(d, q) = (1 - alpha) * zscore(s_cos) + alpha * zscore(s_proj)
 
-Documents are always projected at their LAST token; <position> selects which
-direction (last_pos / entity_pos identification) is loaded and is the leaf of the
-output path:
+Two deliberate differences from our mean-diff retrieval eval:
+  1. The direction is a logistic-regression probe coef (see adapt_iclr_directions.py),
+     trained on `mlp` output activations -- NOT resid_post. So documents are projected
+     at the MATCHING activation location: TransformerLens `blocks.L.hook_mlp_out`
+     (the d_model output of the MLP block, equivalent to their HF `model.layers.L.mlp`).
+     Using from_pretrained_no_processing keeps the activation space identical to the HF
+     model the probe was trained on.
+  2. The model is fixed to Meta-Llama-3-8B-Instruct (the probe is model-specific), and
+     the direction is selected by <source_dataset> (the probe's training dataset), which
+     is the LEAF of the output path -- playing the role `position` played in our eval.
 
-    results/retrieval_evaluation/<model>/<eval>/<direction>/<normalize>/seed_<S>/<procedure>/layer_<L>/<position>/results.jsonl
+Documents are always projected at their LAST token.
 
-llm_hidden_states.pt / sbert_embeddings.pt / docs.jsonl live at the layer level and
-are shared by every position (they do not depend on the direction), so evaluating a
-new position on an already-computed layer needs no model forward pass. Cached
-tensors are reused only when docs.jsonl matches the current corpus; otherwise they
-are recomputed from the current dataset files (--force-recompute re-does the
-results, not matching tensors).
+Output tree (separate from resid_post retrieval_evaluation, never mixed):
+    results/iclr_retrieval_evaluation/<model>/<eval>/<probe_at>/seed_<S>/layer_<L>/<source_dataset>/results.jsonl
+
+llm_hidden_states.pt / sbert_embeddings.pt / docs.jsonl live at the layer level
+(<...>/seed_<S>/layer_<L>/) and are shared across every source_dataset (they depend
+on the corpus + hook, not the direction). Cached tensors are reused only when
+docs.jsonl matches the current corpus.
 
 Usage:
-    python -m src.experiments.retrieval_evaluation --automated
-    python -m src.experiments.retrieval_evaluation --automated --force-recompute
-    python -m src.experiments.retrieval_evaluation \
-        --model meta-llama/Llama-3.1-8B-Instruct --dataset nq_swap --layer 15 --position entity_pos
+    python -m src.experiments.ICLR_paper_retrieval_evaluation --automated
+    python -m src.experiments.ICLR_paper_retrieval_evaluation --automated --force-recompute
+    python -m src.experiments.ICLR_paper_retrieval_evaluation \
+        --dataset nq_swap --source-dataset triviaqa --layer 15
 """
 
 from __future__ import annotations
@@ -42,26 +51,23 @@ import transformer_lens.utils as tl_utils
 from transformer_lens import HookedTransformer
 from sentence_transformers import SentenceTransformer
 
-MODELS = ["meta-llama/Llama-3.1-8B-Instruct", "meta-llama/Llama-3.2-1B-Instruct", "google/gemma-3-4b-it", "Qwen/Qwen2-7B-Instruct"]
-DATASETS = ["nq_swap", "conflictqa"]
-DIRECTION_DATASETS = ["nq_swap", "conflictqa", "longfact"]
-PROCEDURES = ["context_only"]
-POSITIONS = ["last_pos", "entity_pos"]
+MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"  # fixed: probe is model-specific
+EVAL_DATASETS = ["nq_swap", "conflictqa"]
+SOURCE_DATASETS = ["natural_questions_with_context", "triviaqa"]
+PROBE_AT = "mlp"
+LAYERS = [13, 14, 15, 16]
 ALPHAS = [0.0, 0.3, 0.5, 1.0]
 KS = [2, 5, 10]
 SBERT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 BATCH_SIZE = 4
 
 
-def discover_direction_seeds(model_id: str, dataset: str) -> List[int]:
-    root = RESULTS_DIR / "direction_identification" / safe_model_id(model_id) / dataset
+def discover_eval_seeds(dataset: str) -> List[int]:
+    """Seeds are our normalized-dataset test splits (independent of the probe)."""
+    from src.utils import NORMALIZED_DIR
+    root = NORMALIZED_DIR / dataset
     dirs = sorted(root.glob("seed_*"), key=lambda d: int(d.name.split("_")[1]))
-    return [int(d.name.split("_")[1]) for d in dirs if d.is_dir()]
-
-
-def discover_layers(model_id: str, dataset: str, procedure: str, position: str, seed: int) -> List[int]:
-    root = RESULTS_DIR / "direction_identification" / safe_model_id(model_id) / dataset / f"seed_{seed}" / procedure
-    return sorted(int(d.name.split("_")[1]) for d in root.glob("layer_*") if (d / position / "direction.pt").exists())
+    return [int(d.name.split("_")[1]) for d in dirs if (d / "test.jsonl").exists()]
 
 
 def zscore(x: np.ndarray) -> np.ndarray:
@@ -103,9 +109,7 @@ def compute_evaluation(llm_hidden: torch.Tensor,
                     alphas: list[float],
                     ks: list[int],
                     out_dir: Path):
-    """
-    Compute ranking given the embedding similairities and the llm hidden states.
-    """
+    """Compute ranking given the embedding similarities and the llm hidden states."""
     s_proj_all = (llm_hidden @ direction).numpy()  # [N]
     sbert_norm = sbert_emb / (sbert_emb.norm(dim=1, keepdim=True))  # [N, dim]
 
@@ -119,7 +123,6 @@ def compute_evaluation(llm_hidden: torch.Tensor,
 
     records = []
     for si, sample in enumerate(tqdm(samples, desc="Evaluating")):
-        # Get the index of the gold document and the non-factual document in the corpus from the all_docs list
         gold_idx = doc_idx[sample["factual_context"]]
         nf_idx = doc_idx[sample["non_factual_evidence"]]
 
@@ -132,26 +135,20 @@ def compute_evaluation(llm_hidden: torch.Tensor,
             gold_rank = np.where(sorted_indices == gold_idx)[0][0] + 1
             nf_rank   = np.where(sorted_indices == nf_idx)[0][0] + 1
             for k in ks:
-                gold_in_topk = bool(gold_rank <= k)
-                nf_in_topk = bool(nf_rank <= k)
-                topk_indices = sorted_indices[:k].tolist()
                 records.append({
                     "sample_idx": si,
                     "question": sample["question"],
                     "alpha": alpha,
                     "k": k,
-                    "gold_in_topk": gold_in_topk,
-                    "nonfactual_in_topk": nf_in_topk,
+                    "gold_in_topk": bool(gold_rank <= k),
+                    "nonfactual_in_topk": bool(nf_rank <= k),
                     "gold_rank": int(gold_rank),
                     "nonfactual_rank": int(nf_rank),
-                    # No topk_text: the retrieved documents are recoverable from
-                    # topk_indices + the layer-level docs.jsonl.
-                    "topk_indices": topk_indices,
+                    "topk_indices": sorted_indices[:k].tolist(),
                 })
 
     results_path = out_dir / "results.jsonl"
-    # docs.jsonl lives at the layer level: it describes the shared tensors, not the position.
-    docs_path = out_dir.parent / "docs.jsonl"
+    docs_path = out_dir.parent / "docs.jsonl"  # layer level: describes the shared tensors
 
     write_jsonl(results_path, records)
     id_to_doc = {doc_id: text for text, doc_id in doc_idx.items()}
@@ -184,45 +181,37 @@ def cache_matches_corpus(layer_dir: Path, all_docs: list[str]) -> bool:
     return [id_to_doc.get(i) for i in range(len(id_to_doc))] == all_docs
 
 
-def evaluate_combo(model_name: str, dataset: str, direction_dataset: str, procedure: str,
-                   position: str, seed: int, layer: int, alphas: list[float], ks: list[int],
-                   batch_size: int, normalize_direction: bool, normalize_path: str,
-                   sbert_model: str, force: bool = False) -> None:
-    layer_dir = (RESULTS_DIR / "retrieval_evaluation" / safe_model_id(model_name)
-                 / dataset / direction_dataset / normalize_path / f"seed_{seed}"
-                 / procedure / f"layer_{layer}")
-    out_dir = layer_dir / position
+def evaluate_combo(eval_dataset: str, source_dataset: str, probe_at: str, seed: int, layer: int,
+                   alphas: list[float], ks: list[int], batch_size: int, sbert_model: str,
+                   force: bool = False) -> None:
+    layer_dir = (RESULTS_DIR / "iclr_retrieval_evaluation" / safe_model_id(MODEL)
+                 / eval_dataset / probe_at / f"seed_{seed}" / f"layer_{layer}")
+    out_dir = layer_dir / source_dataset  # leaf selects the direction
     if not force and (out_dir / "results.jsonl").exists():
         logger.info(f"Skip (exists): {out_dir}")
         return
 
-    dir_path = (RESULTS_DIR / "direction_identification" / safe_model_id(model_name)
-                / direction_dataset / f"seed_{seed}" / procedure / f"layer_{layer}"
-                / position / "direction.pt")
+    dir_path = (RESULTS_DIR / "iclr_directions" / safe_model_id(MODEL)
+                / source_dataset / probe_at / f"layer_{layer}" / "direction.pt")
     if not dir_path.exists():
         logger.warning(f"Skip (no direction): {dir_path}")
         return
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    setup_logging("retrieval_evaluation", out_dir)
-    logger.info(f"model={model_name} | dataset={dataset} | direction_dataset={direction_dataset} | "
-                f"seed={seed} | layer={layer} | procedure={procedure} | position={position} | "
-                f"normalize_direction={normalize_direction}")
+    setup_logging("ICLR_paper_retrieval_evaluation", out_dir)
+    logger.info(f"model={MODEL} | eval_dataset={eval_dataset} | source_dataset={source_dataset} | "
+                f"probe_at={probe_at} | seed={seed} | layer={layer}")
 
-    samples = load_normalized(dataset, seed)["test"]
+    samples = load_normalized(eval_dataset, seed)["test"]
     all_docs = corpus_of(samples)
     doc_idx = {d: i for i, d in enumerate(all_docs)}
     logger.info(f"Corpus size: {len(all_docs)} unique documents")
 
     direction = torch.load(dir_path, map_location="cpu").float()
-    if normalize_direction:
-        direction = direction / (direction.norm() + 1e-8)
-    logger.info(f"Loaded direction from {dir_path}")
+    logger.info(f"Loaded ICLR probe direction from {dir_path} (dim={direction.shape[0]})")
 
     sbert_enc = SentenceTransformer(sbert_model)
 
-    # Tensors are direction-independent: even with --force-recompute they are reused
-    # when they match the current corpus (a mismatch recomputes them regardless).
     if cache_matches_corpus(layer_dir, all_docs):
         logger.info("Loading cached SBERT embeddings + LLM hidden states (corpus verified)")
         sbert_emb = torch.load(layer_dir / "sbert_embeddings.pt", map_location="cpu")
@@ -233,15 +222,20 @@ def evaluate_combo(model_name: str, dataset: str, direction_dataset: str, proced
         sbert_emb = torch.tensor(emb, dtype=torch.float32)
         torch.save(sbert_emb, layer_dir / "sbert_embeddings.pt")
 
-        logger.info("Computing LLM hidden states ...")
+        logger.info("Computing LLM hidden states (hook_mlp_out) ...")
         device = tl_utils.get_device()
-        model = HookedTransformer.from_pretrained_no_processing(model_name, device=device, dtype="bfloat16")
+        model = HookedTransformer.from_pretrained_no_processing(MODEL, device=device, dtype="bfloat16")
         model.eval()
-        hook_point = tl_utils.get_act_name("resid_post", layer)
+        hook_point = tl_utils.get_act_name("mlp_out", layer)  # blocks.L.hook_mlp_out (d_model)
         llm_hidden = compute_llm_hidden_states(model, all_docs, hook_point, batch_size)
         torch.save(llm_hidden, layer_dir / "llm_hidden_states.pt")
         del model
         torch.cuda.empty_cache()
+
+    if direction.shape[0] != llm_hidden.shape[1]:
+        logger.error(f"Dim mismatch: direction {direction.shape[0]} vs activation {llm_hidden.shape[1]} "
+                     f"-- probe_at/model mismatch, skipping {out_dir}")
+        return
 
     compute_evaluation(llm_hidden, direction, sbert_emb, samples, all_docs, doc_idx,
                        sbert_enc, alphas, ks, out_dir)
@@ -249,50 +243,38 @@ def evaluate_combo(model_name: str, dataset: str, direction_dataset: str, proced
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="meta-llama/Llama-3.1-8B-Instruct")
-    ap.add_argument("--automated", action="store_true", help="Run all hardcoded combinations (models x datasets x directions x positions).")
-    ap.add_argument("--dataset", default="nq_swap")
+    ap.add_argument("--automated", action="store_true", help="Run all eval x source x layer combinations.")
+    ap.add_argument("--dataset", default="nq_swap", help="Our eval dataset (nq_swap / conflictqa).")
+    ap.add_argument("--source-dataset", default="triviaqa", help="Dataset the ICLR probe was trained on.")
+    ap.add_argument("--probe-at", default=PROBE_AT)
     ap.add_argument("--layer", type=int, default=15)
-    ap.add_argument("--direction-dataset", default=None, help="Dataset used for direction (defaults to --dataset)")
-    ap.add_argument("--procedure", default="context_only")
-    ap.add_argument("--position", default="last_pos")
-    ap.add_argument("--alphas", type=float, nargs="+", default=[0.0, 0.3, 0.5, 1.0])
-    ap.add_argument("--ks", type=int, nargs="+", default=[2, 5, 10])
-    ap.add_argument("--sbert-model", default="sentence-transformers/all-MiniLM-L6-v2")
-    ap.add_argument("--batch-size", type=int, default=4)
+    ap.add_argument("--alphas", type=float, nargs="+", default=ALPHAS)
+    ap.add_argument("--ks", type=int, nargs="+", default=KS)
+    ap.add_argument("--sbert-model", default=SBERT_MODEL)
+    ap.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     ap.add_argument("--seed", type=int, default=None,
-                    help="Split seed. If omitted, runs for all seeds found in direction identification results.")
+                    help="Eval test-split seed. If omitted, runs all seeds found in the normalized dataset.")
     ap.add_argument("--force-recompute", action="store_true",
-                    help="Recompute results even if they already exist. Cached tensors are still "
-                         "reused when they match the current corpus.")
+                    help="Recompute results even if they exist. Cached tensors are reused when the corpus matches.")
     args = ap.parse_args()
-
-    normalize_direction = False  # Change here to normalize the directions
-    normalize_path = "normalized" if normalize_direction else "unnormalized"
 
     if args.automated:
         logger.info("Running automated mode ...")
-        combinations = itertools.product(MODELS, DATASETS, DIRECTION_DATASETS, PROCEDURES, POSITIONS)
-        for model_name, dataset, direction_dataset, procedure, position in combinations:
-            seeds = [args.seed] if args.seed is not None else discover_direction_seeds(model_name, direction_dataset)
+        for eval_dataset, source_dataset, layer in itertools.product(EVAL_DATASETS, SOURCE_DATASETS, LAYERS):
+            seeds = [args.seed] if args.seed is not None else discover_eval_seeds(eval_dataset)
             if not seeds:
-                logger.warning(f"No direction seeds found for {model_name}/{direction_dataset}, skipping.")
+                logger.warning(f"No eval seeds found for {eval_dataset}, skipping.")
                 continue
             for seed in seeds:
-                for layer in discover_layers(model_name, direction_dataset, procedure, position, seed):
-                    evaluate_combo(model_name, dataset, direction_dataset, procedure, position,
-                                   seed, layer, ALPHAS, KS, BATCH_SIZE,
-                                   normalize_direction, normalize_path, SBERT_MODEL,
-                                   force=args.force_recompute)
-        logger.info("Done computing automated evaluation.")
+                evaluate_combo(eval_dataset, source_dataset, args.probe_at, seed, layer,
+                               ALPHAS, KS, BATCH_SIZE, SBERT_MODEL, force=args.force_recompute)
+        logger.info("Done computing automated ICLR evaluation.")
     else:
-        direction_dataset = args.direction_dataset or args.dataset
-        seeds = [args.seed] if args.seed is not None else discover_direction_seeds(args.model, direction_dataset)
-        setup_logging("retrieval_evaluation", RESULTS_DIR / "retrieval_evaluation")
+        seeds = [args.seed] if args.seed is not None else discover_eval_seeds(args.dataset)
+        setup_logging("ICLR_paper_retrieval_evaluation", RESULTS_DIR / "iclr_retrieval_evaluation")
         for seed in seeds:
-            evaluate_combo(args.model, args.dataset, direction_dataset, args.procedure, args.position,
-                           seed, args.layer, args.alphas, args.ks, args.batch_size,
-                           normalize_direction, normalize_path, args.sbert_model,
+            evaluate_combo(args.dataset, args.source_dataset, args.probe_at, seed, args.layer,
+                           args.alphas, args.ks, args.batch_size, args.sbert_model,
                            force=args.force_recompute)
         logger.info("Done.")
 

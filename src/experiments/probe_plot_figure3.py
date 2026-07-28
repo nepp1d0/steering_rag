@@ -1,16 +1,24 @@
 """
-Paper-ready re-ranking figure (single 2x2 PDF), fully rank-based.
+Paper-ready re-ranking figure for the LOGISTIC-REGRESSION PROBE directions
+(single 2x2 PDF per position, fully rank-based).
+
+Same layout as plot_figure3.py, reading the probe tree instead of the diff-in-means tree
+and emitting BOTH positions (last_pos, entity_pos):
+
+  - reads   results/probes/top_retrieval_evaluation/...
+  - outputs results/probes/figures/<DIRECTION_DATASET>/[<position>/]figure_3_reranking.pdf
 
 Top row:    mean rank vs alpha — gold (left) and non-factual (right), all models, TOP_ROW_DATASET.
 Bottom-left: rank deltas at alpha=SCATTER_ALPHA — gold rank gain (x) vs non-factual rank change (y).
 Bottom-right: rank separation gain at SCATTER_ALPHA vs model size.
 
 Usage:
-    python -m src.experiments.plot_reranking_figure
+    python -m src.experiments.probe_plot_figure3
 """
 
 from __future__ import annotations
 
+import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -18,13 +26,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
 
-from plot_retrieval_evaluation import (
+# Put this script's own dir on sys.path so the bare import below resolves whether the
+# script is run from src/experiments/ or as `python -m src.experiments.probe_plot_figure3`.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Pure per-path helpers reused from the probe retrieval plotting script.
+from probe_plot_retrieval_evaluation import (  # noqa: E402
     RESULTS_DIR,
     compute_seed_metrics,
     _agg,
 )
 
-TOP_DIR = RESULTS_DIR / "top_retrieval_evaluation"
+TOP_DIR = RESULTS_DIR / "probes" / "top_retrieval_evaluation"
 
 # ── Config ───────────────────────────────────────────────────────────────────
 NORMALIZE = "unnormalized"
@@ -33,18 +45,21 @@ PROCEDURE = "context_only"
 #   "same"    -> in-domain: direction == eval (reproduces the original figure)
 #   <dataset> -> use that direction (e.g. "longfact") tested on the eval datasets
 # The chosen value also becomes an extra output level: figures/<DIRECTION_DATASET>/...
-DIRECTION_DATASET = "longfact"
-# Direction position: "last_pos" keeps the original output paths; other positions
-# ("entity_pos") add an extra output level: .../<POSITION>/figure_3_reranking.pdf
-POSITION = "last_pos"
+DIRECTION_DATASET = "conflictqa"
+# Direction positions: both are emitted. "last_pos" keeps the base output path; other
+# positions ("entity_pos") add an extra output level: .../<POSITION>/figure_3_reranking.pdf
+POSITIONS = ["last_pos", "entity_pos"]
 TOP_ROW_DATASET = "conflictqa"   # which dataset's mean-rank curves go in the top row
-SCATTER_ALPHA = 0.3              # fixed alpha for the bottom-row rank deltas
+SCATTER_ALPHA = 0.5              # fixed alpha for the bottom-row rank deltas
 DROP_ALPHA_ONE = False           # set True to hide the degenerate alpha=1.0 point in the top row
 
-_FIG_DIR = RESULTS_DIR / "figures" / DIRECTION_DATASET
-if POSITION != "last_pos":
-    _FIG_DIR = _FIG_DIR / POSITION
-OUT_PATH = _FIG_DIR / "figure_3_reranking.pdf"
+
+def out_path_for(position: str) -> Path:
+    fig_dir = RESULTS_DIR / "probes" / "figures" / DIRECTION_DATASET
+    if position != "last_pos":
+        fig_dir = fig_dir / position
+    return fig_dir / "figure_3_reranking.pdf"
+
 
 MODELS_BY_SIZE = [
     ("meta-llama__Llama-3.2-1B-Instruct", "Llama-3.2-1B", 1.2),
@@ -84,13 +99,13 @@ def parse_parts(path: Path):
             "seed": p[4], "procedure": p[5], "layer": p[6], "position": p[7]}
 
 
-def collect_groups() -> dict[tuple, list[Path]]:
+def collect_groups(position: str) -> dict[tuple, list[Path]]:
     groups: dict[tuple, list[Path]] = defaultdict(list)
     for f in sorted(TOP_DIR.rglob("results.jsonl")):
         meta = parse_parts(f)
         if meta is None:
             continue
-        if meta["normalize"] != NORMALIZE or meta["procedure"] != PROCEDURE or meta["position"] != POSITION:
+        if meta["normalize"] != NORMALIZE or meta["procedure"] != PROCEDURE or meta["position"] != position:
             continue
         if DIRECTION_DATASET == "same":
             if meta["eval"] != meta["direction"]:   # in-domain only
@@ -148,7 +163,7 @@ def _style(ax, grid_axis="y"):
     ax.set_axisbelow(True)
 
 
-def make_figure(data) -> None:
+def make_figure(data, position: str) -> None:
     plt.rcParams.update(RC)
     fig, axes = plt.subplots(2, 2, figsize=(7.2, 5.0))
 
@@ -168,8 +183,8 @@ def make_figure(data) -> None:
             ax.plot(a, m_, marker="o", markersize=3.5, linewidth=1.8, color=COLORS[model],
                     markeredgecolor="white", markeredgewidth=0.4)
     ax_g.set_yscale("log"); ax_n.set_yscale("log")
-    ax_g.set_title(f"Gold document \u2014 {DATASET_LABELS[ds]}", fontsize=9, pad=4)
-    ax_n.set_title(f"Non-factual document \u2014 {DATASET_LABELS[ds]}", fontsize=9, pad=4)
+    ax_g.set_title(f"Gold document — {DATASET_LABELS[ds]}", fontsize=9, pad=4)
+    ax_n.set_title(f"Non-factual document — {DATASET_LABELS[ds]}", fontsize=9, pad=4)
     ax_g.set_ylabel("mean rank (log)\nlower = better")
     ax_n.set_ylabel("mean rank (log)\nhigher = better")
     ax_g.set_xlabel(r"$\alpha$"); ax_n.set_xlabel(r"$\alpha$")
@@ -233,17 +248,19 @@ def make_figure(data) -> None:
                bbox_to_anchor=(0.5, 1.0), handlelength=1.4, columnspacing=1.6)
 
     fig.tight_layout(pad=0.8)
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(OUT_PATH, bbox_inches="tight")
+    out_path = out_path_for(position)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, bbox_inches="tight")
     plt.close(fig)
-    print(f"Wrote {OUT_PATH}")
+    print(f"Wrote {out_path}")
 
 
 def main() -> None:
-    groups = collect_groups()
-    print(f"Found {len(groups)} (model, dataset) groups under {TOP_DIR}.")
-    data = build_data(groups)
-    make_figure(data)
+    for position in POSITIONS:
+        groups = collect_groups(position)
+        print(f"[{position}] Found {len(groups)} (model, dataset) groups under {TOP_DIR}.")
+        data = build_data(groups)
+        make_figure(data, position)
 
 
 if __name__ == "__main__":

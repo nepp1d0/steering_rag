@@ -99,16 +99,19 @@ def no_context_correct_questions(records: list[dict]) -> set[str]:
     return {r["question"] for r in records if r["condition"] == "no_context" and is_correct(r)}
 
 
-def _draw_grouped(ax, acc_by_model: dict, annotate: bool = False, show_xticklabels: bool = True) -> None:
+def _draw_grouped(ax, acc_by_model: dict, annotate: bool = False, show_xticklabels: bool = True,
+                  conditions: list[str] | None = None, condition_labels: list[str] | None = None) -> None:
     """Draw one grouped-bar panel into the given axes (no legend/title here)."""
-    n_cond = len(CONDITIONS)
+    conditions = conditions or CONDITIONS
+    condition_labels = condition_labels or CONDITION_LABELS
+    n_cond = len(conditions)
     n_models = len(MODELS)
     bar_w = 0.18
     group_w = n_models * bar_w + 0.14
     x = np.arange(n_cond) * group_w
 
     for i, model in enumerate(MODELS):
-        accs = [acc_by_model[model].get(c, 0.0) for c in CONDITIONS]
+        accs = [acc_by_model[model].get(c, 0.0) for c in conditions]
         offsets = x + (i - (n_models - 1) / 2) * bar_w
         bars = ax.bar(offsets, accs, width=bar_w * 0.9, label=MODEL_LABELS[model],
                       color=COLORS[i], edgecolor="none", zorder=3)
@@ -118,7 +121,7 @@ def _draw_grouped(ax, acc_by_model: dict, annotate: bool = False, show_xticklabe
                         f"{val:.2f}", ha="center", va="bottom", fontsize=6, color="#555555")
 
     ax.set_xticks(x)
-    ax.set_xticklabels(CONDITION_LABELS if show_xticklabels else [])
+    ax.set_xticklabels(condition_labels if show_xticklabels else [])
     ax.set_ylim(0, 1.02)
     ax.set_yticks(np.arange(0, 1.01, 0.2))
     ax.set_xlim(-group_w * 0.55, x[-1] + group_w * 0.55)
@@ -160,12 +163,15 @@ def plot_grid(
     col_keys: list[str],
     col_labels: list[str],
     annotate: bool = False,
+    conditions: list[str] | None = None,
+    condition_labels: list[str] | None = None,
 ) -> None:
     """Matrix of grouped-bar panels in one PDF.
 
     `acc` is keyed by (row_key, col_key) -> {model: {condition: accuracy}}.
     Column headers carry the dataset name; row headers (set to "" to hide)
     carry the configuration. One shared legend sits above the whole figure.
+    Pass `conditions`/`condition_labels` to restrict the x-axis to a subset.
     """
     plt.rcParams.update(_RCPARAMS)
     n_rows, n_cols = len(row_keys), len(col_keys)
@@ -177,7 +183,8 @@ def plot_grid(
         for c, ck in enumerate(col_keys):
             ax = axes[r][c]
             show_x = (r == n_rows - 1)  # only the bottom row needs condition labels
-            _draw_grouped(ax, acc[(rk, ck)], annotate=annotate, show_xticklabels=show_x)
+            _draw_grouped(ax, acc[(rk, ck)], annotate=annotate, show_xticklabels=show_x,
+                          conditions=conditions, condition_labels=condition_labels)
             if r == 0:
                 ax.set_title(col_labels[c], fontsize=9, pad=6)
             if c == 0:
@@ -190,6 +197,55 @@ def plot_grid(
     handles, labels = axes[0][0].get_legend_handles_labels()
     fig.legend(handles, labels, ncol=len(MODELS), frameon=False, loc="lower center",
                bbox_to_anchor=(0.5, 1.0), handlelength=1.0,
+               handletextpad=0.4, columnspacing=1.4)
+
+    fig.tight_layout(pad=0.6)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote {out_path}")
+
+
+# Positional-bias slope figure: x = where the factual context sits when both
+# contexts are present; y = P(model answers the factual answer). A rising line
+# (higher when factual is last) means recency bias; falling means primacy bias.
+POS_CONDITIONS = ["both_factual_first", "both_non_factual_first"]
+POS_XLABELS = ["Factual\nContext First", "Factual\nContext Last"]
+
+
+def plot_positional_slope(acc: dict, out_path: Path, col_keys: list[str], col_labels: list[str]) -> None:
+    plt.rcParams.update(_RCPARAMS)
+    n_cols = len(col_keys)
+    x = np.arange(len(POS_CONDITIONS))
+
+    fig, axes = plt.subplots(1, n_cols, figsize=(3.5 * n_cols, 2.5), sharey=True, squeeze=False)
+
+    for c, ck in enumerate(col_keys):
+        ax = axes[0][c]
+        for i, model in enumerate(MODELS):
+            ys = [acc[ck][model].get(cond, 0.0) for cond in POS_CONDITIONS]
+            ax.plot(x, ys, marker="o", markersize=4, linewidth=1.4,
+                    color=COLORS[i], label=MODEL_LABELS[model], zorder=3)
+
+        ax.set_title(col_labels[c], fontsize=9, pad=6)
+        ax.set_xticks(x)
+        ax.set_xticklabels(POS_XLABELS)
+        ax.set_xlim(-0.35, len(POS_CONDITIONS) - 0.65)
+        ax.set_ylim(0, 1.02)
+        ax.set_yticks(np.arange(0, 1.01, 0.2))
+        if c == 0:
+            ax.set_ylabel("P(answer = factual)", labelpad=6)
+        for s in ("top", "right"):
+            ax.spines[s].set_visible(False)
+        for s in ("bottom", "left"):
+            ax.spines[s].set_color("#999999")
+        ax.tick_params(axis="both", which="both", length=0)
+        ax.yaxis.grid(True, linewidth=0.5, color="#DDDDDD", zorder=0)
+        ax.set_axisbelow(True)
+
+    handles, labels = axes[0][0].get_legend_handles_labels()
+    fig.legend(handles, labels, ncol=len(MODELS), frameon=False, loc="lower center",
+               bbox_to_anchor=(0.5, 1.0), handlelength=1.4,
                handletextpad=0.4, columnspacing=1.4)
 
     fig.tight_layout(pad=0.6)
@@ -245,6 +301,42 @@ def main() -> None:
         out_path=PA_DIR / "figure_2_motivation.pdf",
         row_keys=["nc"],
         row_labels=[""],  # caption carries the conditioning; no in-panel row label
+        col_keys=["conflictqa", "nq_swap"],
+        col_labels=["ConflictQA", "NQ-Swap"],
+    )
+
+    # Split figures: single-context conditions only (drop the two "Both" orderings).
+    single_ctx_conditions = ["no_context", "factual_only", "non_factual_only"]
+    single_ctx_labels = ["No Context", "Factual\nOnly", "Non-Factual\nOnly"]
+
+    # Main figure 2: all-questions row.
+    plot_grid(
+        grid_acc,
+        out_path=PA_DIR / "main_figure_2.pdf",
+        row_keys=["all"],
+        row_labels=[""],
+        col_keys=["conflictqa", "nq_swap"],
+        col_labels=["ConflictQA", "NQ-Swap"],
+        conditions=single_ctx_conditions,
+        condition_labels=single_ctx_labels,
+    )
+
+    # Appendix 1 figure 1: no-context-correct subset row.
+    plot_grid(
+        grid_acc,
+        out_path=PA_DIR / "appendix_1_figure_1.pdf",
+        row_keys=["nc"],
+        row_labels=[""],
+        col_keys=["conflictqa", "nq_swap"],
+        col_labels=["ConflictQA", "NQ-Swap"],
+        conditions=single_ctx_conditions,
+        condition_labels=single_ctx_labels,
+    )
+
+    # Appendix 1 figure 2: positional bias in the two-context conditions, nc subset.
+    plot_positional_slope(
+        {ds: grid_acc[("nc", ds)] for ds in datasets},
+        out_path=PA_DIR / "appendix_1_figure_2.pdf",
         col_keys=["conflictqa", "nq_swap"],
         col_labels=["ConflictQA", "NQ-Swap"],
     )

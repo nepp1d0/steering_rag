@@ -1,15 +1,18 @@
 """
-Plot retrieval evaluation results.
+Plot retrieval evaluation results for the LOGISTIC-REGRESSION PROBE directions.
 
-Auto-discovers all results.jsonl under results/retrieval_evaluation/ and saves
-a two-panel line plot (gold recall@k and non-factual rate@k vs k, one line per α)
-next to each results file as retrieval_plot.png.
+Identical to plot_retrieval_evaluation.py in every respect (same per-file plots,
+seed aggregation, layer scoring, top-layer selection and copy) except the two roots:
 
-Expected layout (position-aware, see migrate_results_to_position_layout.py):
-    .../<normalize>/seed_<S>/<procedure>/layer_<L>/<position>/results.jsonl
+  - reads results from  results/probes/retrieval_evaluation/...
+  - writes top dirs to  results/probes/top_retrieval_evaluation/...
+
+This is the PREREQUISITE for probe_direction_analysis_heatmap.py, probe_plot_figure3.py
+and probe_plot_figure_3b.py: it produces the top_layers_<procedure>_<position>.json files
+and the top_retrieval_evaluation tree those scripts read.
 
 Usage:
-    python -m src.experiments.plot_retrieval_evaluation
+    python -m src.experiments.probe_plot_retrieval_evaluation
 """
 
 from __future__ import annotations
@@ -25,6 +28,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 RESULTS_DIR = Path(__file__).resolve().parents[2] / "results"
+# Probe roots: parallel tree so nothing collides with the diff-in-means plots.
+EVAL_ROOT = RESULTS_DIR / "probes" / "retrieval_evaluation"
+TOP_ROOT = RESULTS_DIR / "probes" / "top_retrieval_evaluation"
 
 
 def plot_results(results_path: Path, out_path: Path) -> None:
@@ -57,7 +63,7 @@ def plot_results(results_path: Path, out_path: Path) -> None:
         ax1.plot(ks, gold_rates, marker="o", linestyle=ls, label=label)
         ax2.plot(ks, nf_rates,   marker="o", linestyle=ls, label=label)
 
-    title = "/".join(results_path.relative_to(RESULTS_DIR / "retrieval_evaluation").parts[:-1])
+    title = "/".join(results_path.relative_to(EVAL_ROOT).parts[:-1])
     for ax, ylabel in [(ax1, "gold recall@k"), (ax2, "non-factual rate@k")]:
         ax.set_xlabel("k")
         ax.set_ylabel(ylabel)
@@ -103,7 +109,7 @@ def find_seed(results_path: Path) -> int | None:
 
 def group_key_of(results_path: Path) -> tuple:
     """Path identity ignoring the seed: (model, eval, dir, normalize, procedure, layer)."""
-    parts = results_path.relative_to(RESULTS_DIR / "retrieval_evaluation").parts
+    parts = results_path.relative_to(EVAL_ROOT).parts
     seed_idx = next(i for i, p in enumerate(parts) if SEED_RE.fullmatch(p))
     return parts[:seed_idx] + parts[seed_idx + 1:-1]
 
@@ -177,7 +183,7 @@ def score_layer(metrics: list[dict]) -> tuple[float, float | None]:
 
 def layer_group_key(results_path: Path) -> tuple:
     """(model, eval, dir, normalize, procedure, position) — identity ignoring seed and layer."""
-    parts = results_path.relative_to(RESULTS_DIR / "retrieval_evaluation").parts
+    parts = results_path.relative_to(EVAL_ROOT).parts
     seed_idx = next(i for i, p in enumerate(parts) if SEED_RE.fullmatch(p))
     # after the seed: (procedure, layer_<L>, position, results.jsonl)
     return parts[:seed_idx] + parts[seed_idx + 1:-3] + (parts[-2],)
@@ -202,7 +208,7 @@ def write_top_layers(results_files: list[Path]) -> None:
                            "score": round(score, 4), "n_seeds": len(paths)})
         scored.sort(key=lambda d: -d["score"])
         *prefix, procedure, position = gkey
-        out_path = RESULTS_DIR / "retrieval_evaluation" / Path(*prefix) / f"top_layers_{procedure}_{position}.json"
+        out_path = EVAL_ROOT / Path(*prefix) / f"top_layers_{procedure}_{position}.json"
         out_path.write_text(json.dumps(
             {"group": "/".join(gkey), "top5": scored[:5], "ranking": scored}, indent=2))
         print(f"Wrote {out_path}  (best: layer {scored[0]['layer']} "
@@ -210,15 +216,14 @@ def write_top_layers(results_files: list[Path]) -> None:
 
 
 def copy_top_results() -> None:
-    """Copy the best-layer seed dirs for each (group, position) into top_retrieval_evaluation/.
+    """Copy the best-layer seed dirs for each (group, position) into probes/top_retrieval_evaluation/.
 
     Reads existing top_layers_*.json files (written by write_top_layers), so call
     this after write_top_layers has run. For each json only its own position subdir is
     copied (positions may pick different best layers), plus the layer-level shared
     files (tensors + docs.jsonl) that the heatmap / figure scripts read.
     """
-    TOP_DIR = RESULTS_DIR / "top_retrieval_evaluation"
-    json_files = sorted((RESULTS_DIR / "retrieval_evaluation").rglob("top_layers_*.json"))
+    json_files = sorted(EVAL_ROOT.rglob("top_layers_*.json"))
     print(f"Found {len(json_files)} top_layers JSON files for copying.")
 
     for json_path in json_files:
@@ -242,7 +247,7 @@ def copy_top_results() -> None:
             if not (src / position / "results.jsonl").exists():
                 print(f"Warning: results not found: {src / position}")
                 continue
-            dst = TOP_DIR / src.relative_to(RESULTS_DIR / "retrieval_evaluation")
+            dst = TOP_ROOT / src.relative_to(EVAL_ROOT)
             if (dst / position / "results.jsonl").exists():
                 print(f"Skip (exists): {dst / position}")
                 continue
@@ -253,7 +258,7 @@ def copy_top_results() -> None:
             shutil.copytree(src / position, dst / position, dirs_exist_ok=True)
             print(f"Copied -> {dst / position}")
 
-        dst_json = TOP_DIR / json_path.relative_to(RESULTS_DIR / "retrieval_evaluation")
+        dst_json = TOP_ROOT / json_path.relative_to(EVAL_ROOT)
         dst_json.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(json_path, dst_json)
 
@@ -319,7 +324,7 @@ def plot_aggregated(seed_paths: list[Path], seeds: list[int], out_path: Path, ti
 
 
 def main() -> None:
-    results_files = sorted((RESULTS_DIR / "retrieval_evaluation").rglob("results.jsonl"))
+    results_files = sorted(EVAL_ROOT.rglob("results.jsonl"))
     print(f"Found {len(results_files)} results.jsonl files.")
 
     # Per-file plots (unchanged) — includes legacy results without a seed in the path.
@@ -347,7 +352,7 @@ def main() -> None:
     # Per-group layer ranking (best alpha per layer, across seeds) -> top_layers_*.json.
     write_top_layers(results_files)
 
-    # Copy best-layer dirs to top_retrieval_evaluation/ for version control.
+    # Copy best-layer dirs to probes/top_retrieval_evaluation/ for version control.
     copy_top_results()
 
 

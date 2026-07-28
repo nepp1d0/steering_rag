@@ -145,7 +145,6 @@ def compute_evaluation(llm_scores: torch.Tensor,
                     "nonfactual_in_topk": nf_in_topk,
                     "gold_rank": int(gold_rank),
                     "nonfactual_rank": int(nf_rank),
-                    "topk_text": [text for idx in topk_indices for text, doc_id in doc_idx.items() if idx == doc_id],
                     "topk_indices": topk_indices,
                 })
 
