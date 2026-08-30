@@ -21,9 +21,9 @@ Outputs:
 where <combo> is e.g. "conflictqa", "conflictqa+nq_swap" or "conflictqa+nq_swap+longfact".
 
 Usage:
-    python -m src.experiments.mixed_direction_identification --automated
-    python -m src.experiments.mixed_direction_identification --automated --force-recompute
-    python -m src.experiments.mixed_direction_identification \
+    python src/experiments/mixed_direction_identification.py --automated
+    python src/experiments/mixed_direction_identification.py --automated --force-recompute
+    python src/experiments/mixed_direction_identification.py \
         --model google/gemma-3-4b-it \
         --layers 10,15
 """
@@ -38,8 +38,8 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 
-sys.path.append(str(Path(__file__).resolve().parents[2]))
-from src.utils import (
+sys.path.append(str(Path(__file__).resolve().parent))
+from utils import (
     RESULTS_DIR,
     diff_in_means,
     load_normalized,
@@ -47,7 +47,7 @@ from src.utils import (
     safe_model_id,
     setup_logging,
 )
-from src.experiments.direction_identification import (
+from direction_identification import (
     MODELS,
     collect_side_acts,
     compute_conflictqa_qa_spans,

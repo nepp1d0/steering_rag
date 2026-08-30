@@ -9,22 +9,23 @@ Expected layout (position-aware, see migrate_results_to_position_layout.py):
     .../<normalize>/seed_<S>/<procedure>/layer_<L>/<position>/results.jsonl
 
 Usage:
-    python -m src.experiments.plot_retrieval_evaluation
+    python src/experiments/plot_retrieval_evaluation.py
 """
 
 from __future__ import annotations
 
 import json
 import re
+import shutil
+import sys
 from collections import defaultdict
 from pathlib import Path
-
-import shutil
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-RESULTS_DIR = Path(__file__).resolve().parents[2] / "results"
+sys.path.append(str(Path(__file__).resolve().parent))
+from utils import RESULTS_DIR
 
 
 def plot_results(results_path: Path, out_path: Path) -> None:

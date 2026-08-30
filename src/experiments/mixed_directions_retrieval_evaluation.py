@@ -8,11 +8,10 @@ Same fusion as retrieval_evaluation.py:
 but the direction comes from results/mixed_directions/ and is indexed by a dataset
 *combo* ("conflictqa", "conflictqa+nq_swap", ...) instead of a single dataset.
 
-Loop shape differs from retrieval_evaluation.py on purpose: `llm_hidden_states` depends
+The loop is shaped differently from retrieval_evaluation.py: `llm_hidden_states` depends
 only on (model, eval_dataset, layer) — the direction enters afterwards as a dot product —
-so it is computed once per layer and reused across all 7 combos. Same for the SBERT
-embeddings. This avoids recomputing identical tensors 7x (and reloading the model inside
-the layer loop, as the original does in automated mode).
+so it is computed once per layer and reused across all 7 combos, as are the SBERT
+embeddings.
 
 Mixed directions exist for seed 42 only, so only that split is evaluated.
 
@@ -27,8 +26,8 @@ them against the corpus in cache/layer_<L>/docs.jsonl.
 where <root> = results/mixed_directions_retrieval_evaluation.
 
 Usage:
-    python -m src.experiments.mixed_directions_retrieval_evaluation
-    python -m src.experiments.mixed_directions_retrieval_evaluation --models google/gemma-3-4b-it
+    python src/experiments/mixed_directions_retrieval_evaluation.py
+    python src/experiments/mixed_directions_retrieval_evaluation.py --models google/gemma-3-4b-it
 """
 
 from __future__ import annotations
@@ -42,8 +41,8 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-sys.path.append(str(Path(__file__).resolve().parents[2]))
-from src.utils import RESULTS_DIR, load_normalized, logger, safe_model_id, setup_logging, write_jsonl
+sys.path.append(str(Path(__file__).resolve().parent))
+from utils import RESULTS_DIR, load_normalized, logger, safe_model_id, setup_logging, write_jsonl
 
 import transformer_lens.utils as tl_utils
 from transformer_lens import HookedTransformer

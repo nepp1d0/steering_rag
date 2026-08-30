@@ -6,7 +6,7 @@ Outputs:
     data/normalized_dataset/conflictqa/data.jsonl
 
 Usage:
-    python -m src.experiments.dataset_normalization
+    python src/experiments/dataset_normalization.py
 """
 
 from __future__ import annotations
@@ -22,11 +22,11 @@ import pandas as pd
 from datasets import load_dataset
 
 # Allow running both as a module and as a plain script.
-sys.path.append(str(Path(__file__).resolve().parents[2]))
-from src.utils import NORMALIZED_DIR, REPO_ROOT, logger, setup_logging, write_jsonl
+sys.path.append(str(Path(__file__).resolve().parent))
+from utils import DATA_DIR, NORMALIZED_DIR, logger, setup_logging, write_jsonl
 
 
-CONFLICTQA_DEFAULT_CSV = REPO_ROOT / "data" / "conflictQA-popQA-gpt4_is_memory_correct_non_ambiguous.csv"
+CONFLICTQA_DEFAULT_CSV = DATA_DIR / "conflictQA-popQA-gpt4_is_memory_correct_non_ambiguous.csv"
 NQ_SWAP_HF_ID = "younanna/NQ-Swap"
 LONGFACT_HF_ID = "obalcells/hallucination-heads-longfact"
 LONGFACT_MODEL_ID_HF = "Llama-3.3-70B-Instruct"

@@ -6,11 +6,12 @@ Bottom-left: rank deltas at alpha=SCATTER_ALPHA — gold rank gain (x) vs non-fa
 Bottom-right: rank separation gain at SCATTER_ALPHA vs model size.
 
 Usage:
-    python -m src.experiments.plot_reranking_figure
+    python src/experiments/plot_reranking_figure.py
 """
 
 from __future__ import annotations
 
+import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -18,7 +19,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
 
-from plot_retrieval_evaluation import (
+sys.path.append(str(Path(__file__).resolve().parent))
+from plot_retrieval_evaluation import (  # noqa: E402
     RESULTS_DIR,
     compute_seed_metrics,
     _agg,
@@ -33,11 +35,11 @@ PROCEDURE = "context_only"
 #   "same"    -> in-domain: direction == eval (reproduces the original figure)
 #   <dataset> -> use that direction (e.g. "longfact") tested on the eval datasets
 # The chosen value also becomes an extra output level: figures/<DIRECTION_DATASET>/...
-DIRECTION_DATASET = "longfact"
+DIRECTION_DATASET = "nq_swap"
 # Direction position: "last_pos" keeps the original output paths; other positions
 # ("entity_pos") add an extra output level: .../<POSITION>/figure_3_reranking.pdf
 POSITION = "last_pos"
-TOP_ROW_DATASET = "conflictqa"   # which dataset's mean-rank curves go in the top row
+TOP_ROW_DATASET = "nq_swap"   # which dataset's mean-rank curves go in the top row
 SCATTER_ALPHA = 0.3              # fixed alpha for the bottom-row rank deltas
 DROP_ALPHA_ONE = False           # set True to hide the degenerate alpha=1.0 point in the top row
 

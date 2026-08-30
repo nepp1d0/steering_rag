@@ -1,18 +1,13 @@
 """
-Plot Figure 4: end-to-end evaluation, paper-ready.
+Figure 4: end-to-end answer accuracy vs k.
 
-One line plot per dataset slice: end-to-end answer accuracy vs k, with one colour
-per model (ordered by parameter count, so the scaling trend reads left to right),
-solid = factuality re-ranking (the retrieved pool re-ranked by the factuality
-score at its operating alpha) and dashed = baseline (alpha=0, similarity-only
-retrieval). Mean +/- std across seeds.
+One line plot per dataset slice, one colour per model (ordered by parameter count).
+Solid = the retrieved pool re-ranked by the factuality score at its operating alpha,
+dashed = baseline (alpha=0, similarity only). Mean +/- std across seeds.
 
-alpha is the re-ranking weight in s_alpha: alpha=0 recovers similarity-only
-retrieval (the baseline); a positive alpha lets the factuality score decide which
-top-k documents reach the generator. One operating alpha per
-(model, eval, direction, normalize) was evaluated, so there is exactly one
-re-ranked curve per model. The k axis is drawn at the true k positions (linear),
-so the uneven 5 -> 10 gap is shown honestly rather than evenly spaced.
+One operating alpha per (model, eval, direction, normalize) was evaluated, so there is
+exactly one re-ranked curve per model. The k axis is linear, at the true k positions, so
+the uneven 5 -> 10 gap is not evenly spaced.
 
 Reuses the results layout written by the end-to-end evaluation:
   end_to_end_evaluation/<model>/<eval>/<direction>/<normalize>/.../seed_<n>/layer_<m>/results.jsonl
@@ -25,14 +20,14 @@ Outputs (under results/end_to_end_evaluation/figures/):
 Set RESULTS_DIR in the environment to point the script at a results tree elsewhere.
 
 Usage:
-    python -m src.experiments.plot_figure4
+    python src/experiments/plot_figure_4.py
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
+import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -40,8 +35,9 @@ import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 import numpy as np
 
-RESULTS_DIR = Path(os.environ.get(
-    "RESULTS_DIR", Path(__file__).resolve().parents[2] / "results"))
+sys.path.append(str(Path(__file__).resolve().parent))
+from utils import RESULTS_DIR
+
 E2E_DIR = RESULTS_DIR / "end_to_end_evaluation"
 FIG_DIR = E2E_DIR / "figures"
 

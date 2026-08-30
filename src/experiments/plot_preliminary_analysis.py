@@ -10,19 +10,21 @@ Combined panels (one PDF each):
   4. figure_2_motivation.pdf  – 1x2: subset only, both datasets (main paper)
 
 Usage:
-    python -m src.experiments.plot_preliminary_analysis
+    python src/experiments/plot_preliminary_analysis.py
 """
 
 from __future__ import annotations
 
 import json
+import sys
 from collections import defaultdict
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-RESULTS_DIR = Path(__file__).resolve().parents[2] / "results"
+sys.path.append(str(Path(__file__).resolve().parent))
+from utils import RESULTS_DIR
 PA_DIR = RESULTS_DIR / "preliminary_analysis"
 
 # Ordered by parameter count so the capability trend reads left-to-right.

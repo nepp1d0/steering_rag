@@ -15,7 +15,7 @@ Outputs:
     results/mixed_directions_top_retrieval_evaluation/   (best layer per group, copied)
 
 Usage:
-    python -m src.experiments.mixed_directions_plot_retrieval_evaluation
+    python src/experiments/mixed_directions_plot_retrieval_evaluation.py
 """
 
 from __future__ import annotations
@@ -23,13 +23,15 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import sys
 from collections import defaultdict
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-RESULTS_DIR = Path(__file__).resolve().parents[2] / "results"
+sys.path.append(str(Path(__file__).resolve().parent))
+from utils import RESULTS_DIR
 EVAL_DIR = RESULTS_DIR / "mixed_directions_retrieval_evaluation"
 TOP_DIR = RESULTS_DIR / "mixed_directions_top_retrieval_evaluation"
 

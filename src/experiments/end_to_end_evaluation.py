@@ -13,7 +13,7 @@ For each (sample, alpha, k) we store the prompt, the retrieved docs with scores,
 the generated answer, the ground-truth aliases and an is_correct flag.
 
 Usage:
-    python -m src.experiments.end_to_end_evaluation
+    python src/experiments/end_to_end_evaluation.py
 """
 
 from __future__ import annotations
@@ -32,8 +32,8 @@ import torch
 # fork, otherwise the forked child inherits the context and dies on cudaErrorInitializationError.
 os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 
-sys.path.append(str(Path(__file__).resolve().parents[2]))
-from src.utils import RESULTS_DIR, load_normalized, logger, safe_model_id, setup_logging, write_jsonl
+sys.path.append(str(Path(__file__).resolve().parent))
+from utils import RESULTS_DIR, load_normalized, logger, safe_model_id, setup_logging, write_jsonl
 
 from sentence_transformers import SentenceTransformer
 from vllm import LLM, SamplingParams

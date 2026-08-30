@@ -13,7 +13,7 @@ Reads:
   direction -> results/direction_identification/<model>/<ds>/seed_*/<proc>/layer_*/<position>/direction.pt
 
 Usage:
-    python -m src.experiments.plot_figure_3b
+    python src/experiments/plot_figure_3b.py
 """
 
 from __future__ import annotations
@@ -26,13 +26,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-# Two helpers reused from the retrieval plotting script:
-#   compute_seed_metrics(path) -> dict with "mean_gold_rank": {alpha: mean rank}, ...
-#   _agg(list_of_values)       -> (mean, std) across seeds
-from plot_retrieval_evaluation import RESULTS_DIR, compute_seed_metrics, _agg
-
-sys.path.append(str(Path(__file__).resolve().parents[2]))
-from src.utils import load_normalized  # noqa: E402
+sys.path.append(str(Path(__file__).resolve().parent))
+# compute_seed_metrics(path) -> {"mean_gold_rank": {alpha: mean rank}, ...}; _agg -> (mean, std).
+from plot_retrieval_evaluation import RESULTS_DIR, compute_seed_metrics, _agg  # noqa: E402
+from utils import load_normalized  # noqa: E402
 
 # gaussian_kde gives the smooth density curves in panels C/D.
 # If scipy is missing we fall back to plain histograms.

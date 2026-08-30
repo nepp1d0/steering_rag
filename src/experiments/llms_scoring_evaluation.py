@@ -10,8 +10,8 @@ Per-record output schema matches retrieval_evaluation.py exactly so downstream
 plotting can be shared.
 
 Usage:
-    python -m src.experiments.llms_scoring_evaluation --automated
-    python -m src.experiments.llms_scoring_evaluation \
+    python src/experiments/llms_scoring_evaluation.py --automated
+    python src/experiments/llms_scoring_evaluation.py \
         --model meta-llama/Llama-3.1-8B-Instruct \
         --dataset nq_swap
 """
@@ -31,8 +31,8 @@ from tqdm import tqdm
 
 os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 
-sys.path.append(str(Path(__file__).resolve().parents[2]))
-from src.utils import NORMALIZED_DIR, RESULTS_DIR, load_normalized, logger, safe_model_id, setup_logging, write_jsonl
+sys.path.append(str(Path(__file__).resolve().parent))
+from utils import NORMALIZED_DIR, RESULTS_DIR, load_normalized, logger, safe_model_id, setup_logging, write_jsonl
 
 from sentence_transformers import SentenceTransformer
 from vllm import LLM, SamplingParams

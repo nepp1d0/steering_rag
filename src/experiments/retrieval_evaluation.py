@@ -17,9 +17,9 @@ are recomputed from the current dataset files (--force-recompute re-does the
 results, not matching tensors).
 
 Usage:
-    python -m src.experiments.retrieval_evaluation --automated
-    python -m src.experiments.retrieval_evaluation --automated --force-recompute
-    python -m src.experiments.retrieval_evaluation \
+    python src/experiments/retrieval_evaluation.py --automated
+    python src/experiments/retrieval_evaluation.py --automated --force-recompute
+    python src/experiments/retrieval_evaluation.py \
         --model meta-llama/Llama-3.1-8B-Instruct --dataset nq_swap --layer 15 --position entity_pos
 """
 
@@ -35,8 +35,8 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-sys.path.append(str(Path(__file__).resolve().parents[2]))
-from src.utils import RESULTS_DIR, load_normalized, logger, safe_model_id, setup_logging, write_jsonl
+sys.path.append(str(Path(__file__).resolve().parent))
+from utils import RESULTS_DIR, load_normalized, logger, safe_model_id, setup_logging, write_jsonl
 
 import transformer_lens.utils as tl_utils
 from transformer_lens import HookedTransformer
@@ -187,8 +187,9 @@ def cache_matches_corpus(layer_dir: Path, all_docs: list[str]) -> bool:
 def evaluate_combo(model_name: str, dataset: str, direction_dataset: str, procedure: str,
                    position: str, seed: int, layer: int, alphas: list[float], ks: list[int],
                    batch_size: int, normalize_direction: bool, normalize_path: str,
-                   sbert_model: str, force: bool = False) -> None:
-    layer_dir = (RESULTS_DIR / "retrieval_evaluation" / safe_model_id(model_name)
+                   sbert_model: str, force: bool = False,
+                   output_dir: str = "retrieval_evaluation") -> None:
+    layer_dir = (RESULTS_DIR / output_dir / safe_model_id(model_name)
                  / dataset / direction_dataset / normalize_path / f"seed_{seed}"
                  / procedure / f"layer_{layer}")
     out_dir = layer_dir / position
@@ -249,10 +250,15 @@ def evaluate_combo(model_name: str, dataset: str, direction_dataset: str, proced
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="meta-llama/Llama-3.1-8B-Instruct")
+    ap.add_argument("--model", default=None,
+                    help="HuggingFace model id. Required without --automated; with --automated "
+                         "it narrows the batch to this model (default: the whole MODELS list).")
     ap.add_argument("--automated", action="store_true", help="Run all hardcoded combinations (models x datasets x directions x positions).")
     ap.add_argument("--dataset", default="nq_swap")
     ap.add_argument("--layer", type=int, default=15)
+    ap.add_argument("--layers", type=int, nargs="+", default=None,
+                    help="Restrict --automated to these layers (default: every layer that has a "
+                         "direction on disk). Ignored outside --automated, which uses --layer.")
     ap.add_argument("--direction-dataset", default=None, help="Dataset used for direction (defaults to --dataset)")
     ap.add_argument("--procedure", default="context_only")
     ap.add_argument("--position", default="last_pos")
@@ -265,27 +271,39 @@ def main() -> None:
     ap.add_argument("--force-recompute", action="store_true",
                     help="Recompute results even if they already exist. Cached tensors are still "
                          "reused when they match the current corpus.")
+    ap.add_argument("--output-dir", default="retrieval_evaluation",
+                    help="Folder under results/ to write everything into (default: "
+                         "retrieval_evaluation). Behaves exactly like the default folder: "
+                         "cached tensors found there are reused, otherwise they are recomputed "
+                         "and saved there.")
     args = ap.parse_args()
 
     normalize_direction = False  # Change here to normalize the directions
     normalize_path = "normalized" if normalize_direction else "unnormalized"
 
     if args.automated:
-        logger.info("Running automated mode ...")
-        combinations = itertools.product(MODELS, DATASETS, DIRECTION_DATASETS, PROCEDURES, POSITIONS)
+        # --model narrows the batch when given; omit it to run every model in MODELS.
+        models = [args.model] if args.model else MODELS
+        logger.info(f"Running automated mode over models={models} ...")
+        combinations = itertools.product(models, DATASETS, DIRECTION_DATASETS, PROCEDURES, POSITIONS)
         for model_name, dataset, direction_dataset, procedure, position in combinations:
             seeds = [args.seed] if args.seed is not None else discover_direction_seeds(model_name, direction_dataset)
             if not seeds:
                 logger.warning(f"No direction seeds found for {model_name}/{direction_dataset}, skipping.")
                 continue
             for seed in seeds:
-                for layer in discover_layers(model_name, direction_dataset, procedure, position, seed):
+                layers = discover_layers(model_name, direction_dataset, procedure, position, seed)
+                if args.layers is not None:
+                    layers = [L for L in layers if L in set(args.layers)]
+                for layer in layers:
                     evaluate_combo(model_name, dataset, direction_dataset, procedure, position,
                                    seed, layer, ALPHAS, KS, BATCH_SIZE,
                                    normalize_direction, normalize_path, SBERT_MODEL,
-                                   force=args.force_recompute)
+                                   force=args.force_recompute, output_dir=args.output_dir)
         logger.info("Done computing automated evaluation.")
     else:
+        if not args.model:
+            ap.error("--model is required without --automated")
         direction_dataset = args.direction_dataset or args.dataset
         seeds = [args.seed] if args.seed is not None else discover_direction_seeds(args.model, direction_dataset)
         setup_logging("retrieval_evaluation", RESULTS_DIR / "retrieval_evaluation")
@@ -293,7 +311,7 @@ def main() -> None:
             evaluate_combo(args.model, args.dataset, direction_dataset, args.procedure, args.position,
                            seed, args.layer, args.alphas, args.ks, args.batch_size,
                            normalize_direction, normalize_path, args.sbert_model,
-                           force=args.force_recompute)
+                           force=args.force_recompute, output_dir=args.output_dir)
         logger.info("Done.")
 
 

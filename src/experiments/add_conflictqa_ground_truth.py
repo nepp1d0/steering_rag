@@ -7,7 +7,7 @@ Run this instead of regenerating, so the existing splits (and the directions /
 retrieval results computed on them) stay untouched.
 
 Usage:
-    python -m src.experiments.add_conflictqa_ground_truth
+    python src/experiments/add_conflictqa_ground_truth.py
 """
 
 from __future__ import annotations
@@ -19,10 +19,10 @@ from pathlib import Path
 
 import pandas as pd
 
-sys.path.append(str(Path(__file__).resolve().parents[2]))
-from src.utils import NORMALIZED_DIR, REPO_ROOT, logger, write_jsonl
+sys.path.append(str(Path(__file__).resolve().parent))
+from utils import DATA_DIR, NORMALIZED_DIR, logger, write_jsonl
 
-CSV_PATH = REPO_ROOT / "data" / "conflictQA-popQA-gpt4_is_memory_correct_non_ambiguous.csv"
+CSV_PATH = DATA_DIR / "conflictQA-popQA-gpt4_is_memory_correct_non_ambiguous.csv"
 
 
 def main() -> None:

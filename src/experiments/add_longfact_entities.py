@@ -10,7 +10,7 @@ Run this instead of regenerating, so the existing splits (and the directions
 computed on them) stay untouched.
 
 Usage:
-    python -m src.experiments.add_longfact_entities
+    python src/experiments/add_longfact_entities.py
 """
 
 from __future__ import annotations
@@ -20,9 +20,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List
 
-sys.path.append(str(Path(__file__).resolve().parents[2]))
-from src.utils import NORMALIZED_DIR, logger, write_jsonl
-from src.experiments.dataset_normalization import LONGFACT_HF_ID, LONGFACT_MODEL_ID_HF
+sys.path.append(str(Path(__file__).resolve().parent))
+from utils import NORMALIZED_DIR, logger, write_jsonl
+from dataset_normalization import LONGFACT_HF_ID, LONGFACT_MODEL_ID_HF
 
 from datasets import load_dataset
 

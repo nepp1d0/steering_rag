@@ -12,7 +12,7 @@ Output:
     results/preliminary_analysis/<model>/<dataset>/results.jsonl
 
 Usage:
-    python -m src.experiments.preliminary_analysis
+    python src/experiments/preliminary_analysis.py
 """
 
 from __future__ import annotations
@@ -25,8 +25,8 @@ from pathlib import Path
 
 os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 
-sys.path.append(str(Path(__file__).resolve().parents[2]))
-from src.utils import RESULTS_DIR, load_normalized, logger, safe_model_id, setup_logging, write_jsonl
+sys.path.append(str(Path(__file__).resolve().parent))
+from utils import RESULTS_DIR, load_normalized, logger, safe_model_id, setup_logging, write_jsonl
 
 from vllm import LLM, SamplingParams
 
