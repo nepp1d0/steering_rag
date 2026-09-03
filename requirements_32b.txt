@@ -1,0 +1,26 @@
+# Environment for reproducing the steering_rag pipeline, pinned to the versions the
+# original four-model results were produced with (conda env `bias_rag`, Python 3.12).
+#
+#   conda create -n bias_rag python=3.12 -y
+#   conda activate bias_rag
+#   pip install -r requirements_32b.txt
+#
+# torch is installed first and separately because the CUDA build must match the driver.
+# The pin below is the CUDA 13.0 build; pick the wheel index for your own CUDA version
+# from https://pytorch.org if 13.0 is not what the machine has.
+#
+#   pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cu130
+
+torch==2.11.0
+transformer_lens==3.2.1
+vllm==0.21.0
+transformers==5.8.1
+sentence-transformers==3.3.1
+datasets==4.4.2
+numpy==2.3.5
+pandas==2.2.2
+scikit-learn==1.5.2
+matplotlib==3.10.0
+loguru==0.7.2
+blingfire==0.1.8
+tqdm

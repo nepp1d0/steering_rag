@@ -56,7 +56,7 @@ from scipy.stats import wilcoxon
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from clasheval_pipeline import (       # noqa: E402
-    HEADLINE_DOMAINS, MODEL, OUT_ROOT, SEEDS, load_control_direction,
+    HEADLINE_DOMAINS, MODEL, OUT_ROOT, SEEDS, discover_direction_layers, load_control_direction,
     load_eval_pairs, load_real_direction, safe_model_id, select_headline,
 )
 from clasheval_pool_ranking import zscore   # noqa: E402
@@ -200,10 +200,17 @@ def main() -> None:
     frozen = {int(ds): v for ds, v in frozen_raw.items()}
 
     H_doc = torch.load(hidden_dir / "headline_doc_repr.pt", map_location="cpu").float()
+    # Every tensor below is restricted to the layers that actually have a direction, so the
+    # null controls (which are generated per layer, not read from disk) are built on exactly
+    # the same layers as the real directions.
+    layers = discover_direction_layers(model)
+    print(f"[layers] all-layer mean runs over {len(layers)}/{H_doc.shape[0]} layers present "
+          f"for every (dataset, seed): {layers}")
+    H_doc = H_doc[layers]
     n_layers = H_doc.shape[0]
 
     acts = torch.load(hidden_dir / "nq_swap_train_acts.pt", map_location="cpu")
-    H_pos, H_neg = acts["pos"].float(), acts["neg"].float()
+    H_pos, H_neg = acts["pos"].float()[layers], acts["neg"].float()[layers]
 
     all_pools = []
     for ds in DRAW_SEEDS:
@@ -256,7 +263,7 @@ def main() -> None:
         """Returns list of [12] all-layer-mean z per pool; if keep_full, also returns the
         [n_pools, n_layers, 12] full (non-collapsed) per-layer z matrix."""
         if source in ("nq_swap", "conflictqa", "longfact"):
-            v = torch.stack([load_real_direction(model, source, draw_id, L) for L in range(n_layers)])
+            v = torch.stack([load_real_direction(model, source, draw_id, L) for L in layers])
         elif source == "random_unit":
             v = random_unit_direction_stack(draw_id, H_doc.shape[-1], n_layers)
         elif source == "shuffled_label":
@@ -500,6 +507,7 @@ def main() -> None:
 
     out = {
         "model": model, "domains": HEADLINE_DOMAINS, "pool_size": POOL_SIZE, "n_layers": n_layers,
+        "layers_used": layers,
         "n_eligible_questions_by_domain": {d: len(by_domain[d]) for d in HEADLINE_DOMAINS},
         "n_excluded_lt3_variants": n_excluded, "draw_seeds": DRAW_SEEDS,
         "n_pool_instances": n_pools, "n_sbert_degenerate_pools": n_degenerate,

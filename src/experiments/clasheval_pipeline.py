@@ -385,23 +385,60 @@ def load_real_direction(model_name: str, dataset: str, seed: int, layer: int) ->
     return torch.load(p, map_location="cpu").float()
 
 
+# The three identification datasets figure 7 draws as separate series.
+FIGURE7_DIRECTION_DATASETS = ["nq_swap", "conflictqa", "longfact"]
+
+
+def discover_direction_layers(model_name: str, datasets: list[str] | None = None,
+                              seeds: list[int] | None = None) -> list[int]:
+    """Layers with a direction.pt on disk for EVERY (dataset, seed) pair.
+
+    The all-layer mean below used to run over range(n_layers). The four original models have a
+    direction at every layer, so for them this returns exactly range(n_layers) and every
+    published number is unchanged. Models large enough that identifying all layers is
+    impractical are identified on a strided subset instead, and the mean then has to run over
+    what is actually on disk.
+
+    The set is intersected over all three datasets, not taken per dataset: figure 7 puts the
+    three series in one panel, so they must be averaged over the same layers to be comparable.
+    """
+    datasets = datasets or FIGURE7_DIRECTION_DATASETS
+    seeds = seeds or SEEDS
+    common: set[int] | None = None
+    for dataset in datasets:
+        for seed in seeds:
+            root = (RESULTS_DIR / "direction_identification" / safe_model_id(model_name)
+                    / dataset / f"seed_{seed}" / PROCEDURE)
+            present = {int(p.parent.parent.name.removeprefix("layer_"))
+                       for p in root.glob(f"layer_*/{POSITION}/direction.pt")}
+            common = present if common is None else common & present
+    layers = sorted(common or [])
+    if not layers:
+        raise RuntimeError(
+            f"No layer has a direction.pt for every (dataset, seed) pair of {model_name}. "
+            f"Run direction_identification.py for {datasets} first.")
+    return layers
+
+
 def load_control_direction(hidden_dir: Path, method: str, seed: int, layer: int) -> torch.Tensor:
     p = hidden_dir / "controls" / method / f"seed_{seed}" / f"layer_{layer}" / "direction.pt"
     return torch.load(p, map_location="cpu").float()
 
 
-def paired_correct_matrix(H_doc: torch.Tensor, direction_getter, seeds: list[int], n_layers: int) -> np.ndarray:
-    """C[seed, layer, pair] in {0, 0.5, 1}: 1 if delta=h(orig).v - h(mod).v > 0, 0 if <0, 0.5 if ==0."""
+def paired_correct_matrix(H_doc: torch.Tensor, direction_getter, seeds: list[int], layers: list[int]) -> np.ndarray:
+    """C[seed, layer, pair] in {0, 0.5, 1}: 1 if delta=h(orig).v - h(mod).v > 0, 0 if <0, 0.5 if ==0.
+
+    `layers` are absolute indices into H_doc; C's layer axis follows their order."""
     n_pairs = H_doc.shape[1]
     Hf = H_doc.float()
-    C = np.empty((len(seeds), n_layers, n_pairs), dtype=np.float32)
+    C = np.empty((len(seeds), len(layers), n_pairs), dtype=np.float32)
     for si, seed in enumerate(seeds):
-        for L in range(n_layers):
+        for li, L in enumerate(layers):
             v = direction_getter(seed, L)
             h_orig = (Hf[L, :, 0, :] @ v).numpy()
             h_mod = (Hf[L, :, 1, :] @ v).numpy()
             delta = h_orig - h_mod
-            C[si, L] = np.where(delta > 0, 1.0, np.where(delta < 0, 0.0, 0.5))
+            C[si, li] = np.where(delta > 0, 1.0, np.where(delta < 0, 0.0, 0.5))
     return C
 
 
@@ -490,10 +527,13 @@ def main() -> None:
                                   args.force or args.force_controls)
 
     # ---- stage 4: metrics
+    layers = discover_direction_layers(args.model, seeds=args.seeds)
+    print(f"[layers] all-layer mean runs over {len(layers)}/{n_layers} layers present for "
+          f"every (dataset, seed): {layers}")
     results = {}
     for ds in args.direction_sources:
         getter = lambda seed, L, ds=ds: load_real_direction(args.model, ds, seed, L)
-        C = paired_correct_matrix(H_doc, getter, args.seeds, n_layers)
+        C = paired_correct_matrix(H_doc, getter, args.seeds, layers)
         results[ds] = summarize_auroc(C, args.n_boot, args.boot_seed)
         r = results[ds]
         print(f"[RESULT] {ds}: all-layer-mean paired AUROC = {r['auroc_all_layer_mean']:.4f} "
@@ -502,7 +542,7 @@ def main() -> None:
 
     for method in ["random_unit", "shuffled_label"]:
         getter = lambda seed, L, method=method: load_control_direction(hidden_dir, method, seed, L)
-        C = paired_correct_matrix(H_doc, getter, args.seeds, n_layers)
+        C = paired_correct_matrix(H_doc, getter, args.seeds, layers)
         results[method] = summarize_auroc(C, args.n_boot, args.boot_seed)
         r = results[method]
         gate = "PASS" if r["ci_lo"] <= 0.5 <= r["ci_hi"] else "FAIL"
@@ -512,6 +552,7 @@ def main() -> None:
     out = {
         "model": args.model, "domains": args.domains, "n_pairs_total_9855_check": len(full),
         "n_pairs_headline": len(headline), "chunk_check": chunk_check,
+        "layers_used": layers,
         "timings_s": timings, "wall_clock_total_s": time.time() - t_start,
         "results": results,
     }

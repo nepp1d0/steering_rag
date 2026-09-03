@@ -100,7 +100,7 @@ python src/experiments/mixed_directions_plot_end_to_end_combos.py
 ```
 
 The paper figure stacks two outputs from `results/figures/mixed/`: the **bottom row** of
-`figure_combos.pdf` on top, and `figure_combos_end_to_end_k2.pdf` below.
+`figure_combos.pdf` on top, and `figure_combos_end_to_end.pdf` below.
 
 Rank-separation numbers quoted in §4.2: `python src/experiments/recap_rank_separation.py`
 (`--alpha` to change the operating point) → `results/figures/recap/`.

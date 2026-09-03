@@ -52,12 +52,14 @@ MODELS_BY_SIZE = [
     ("google__gemma-3-4b-it",             "Gemma-3-4B",   4.3),
     ("Qwen__Qwen2-7B-Instruct",           "Qwen2-7B",     7.6),
     ("meta-llama__Llama-3.1-8B-Instruct", "Llama-3.1-8B", 8.0),
+    ("Qwen__Qwen2.5-32B-Instruct",       "Qwen2.5-32B", 32.8),
 ]
 MODEL_COLORS = {   # same palette as plot_figure3.py so the two figures read as siblings
     "meta-llama__Llama-3.2-1B-Instruct": "#FFB300",  # Amber 600
     "google__gemma-3-4b-it":             "#00897B",  # Teal 600
     "Qwen__Qwen2-7B-Instruct":           "#7E57C2",  # Deep Purple 400
     "meta-llama__Llama-3.1-8B-Instruct": "#1E88E5",  # Blue 600
+    "Qwen__Qwen2.5-32B-Instruct":        "#D81B60",  # Pink 600
 }
 
 # Ordered singles -> pairs -> triple; the bottom-row x axis follows this order.

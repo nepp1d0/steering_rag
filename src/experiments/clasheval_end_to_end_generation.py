@@ -55,8 +55,8 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from clasheval_pipeline import (       # noqa: E402
-    HEADLINE_DOMAINS, MODEL, OUT_ROOT, SEEDS, load_eval_pairs, load_real_direction,
-    safe_model_id, select_headline,
+    HEADLINE_DOMAINS, MODEL, OUT_ROOT, SEEDS, discover_direction_layers, load_eval_pairs,
+    load_real_direction, safe_model_id, select_headline,
 )
 from clasheval_pool_ranking import zscore                       # noqa: E402
 from clasheval_pool_ranking_v2 import build_eligible_questions  # noqa: E402
@@ -120,8 +120,8 @@ def label_answer(pred: float | None, gold: float, shown_corrupted: list[float]) 
     return "other"
 
 
-def load_direction_stack(model: str, dataset: str, n_layers: int) -> torch.Tensor:
-    """[n_layers, d_model]. SEED_MODE="mean" averages the 5 identification seeds per layer.
+def load_direction_stack(model: str, dataset: str, layers: list[int]) -> torch.Tensor:
+    """[len(layers), d_model]. SEED_MODE="mean" averages the 5 identification seeds per layer.
 
     The nq_swap direction is the least seed-stable of the three (mean across-seed cosine 0.80 on
     Llama-3.1-8B and Qwen2-7B, 0.73 on Llama-3.2-1B, 0.32 on gemma-3-4b), so a single seed is a
@@ -131,10 +131,10 @@ def load_direction_stack(model: str, dataset: str, n_layers: int) -> torch.Tenso
     """
     if SEED_MODE == "single":
         return torch.stack([load_real_direction(model, dataset, SINGLE_SEED, L)
-                            for L in range(n_layers)])
+                            for L in layers])
     return torch.stack([
         torch.stack([load_real_direction(model, dataset, s, L) for s in SEEDS]).mean(0)
-        for L in range(n_layers)
+        for L in layers
     ])
 
 
@@ -233,11 +233,15 @@ def main() -> None:
 
     # ---- factuality axis, one direction dataset at a time ------------------------------------
     H_doc = torch.load(OUT_ROOT / ms / "headline_doc_repr.pt", map_location="cpu").float()
+    layers = discover_direction_layers(model)
+    print(f"[layers] all-layer mean runs over {len(layers)}/{H_doc.shape[0]} layers present "
+          f"for every (dataset, seed): {layers}")
+    H_doc = H_doc[layers]
     n_layers = H_doc.shape[0]
 
     jobs = []
     for ds in DIRECTION_DATASETS:
-        v = load_direction_stack(model, ds, n_layers)
+        v = load_direction_stack(model, ds, layers)
         # one einsum over the whole cached tensor, then index per pool -- far cheaper than
         # slicing H_doc 477 times per dataset
         proj_all = torch.einsum("lpsd,ld->lps", H_doc, v).numpy()      # [n_layers, n_pairs, 2]
